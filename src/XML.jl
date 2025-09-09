@@ -9,10 +9,13 @@ const escape_chars = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", "'" => "&apo
 unescape(x::AbstractString) = replace(x, reverse.(escape_chars)...)
 escape(x::AbstractString) = replace(x, escape_chars...)
 
+#-----------------------------------------------------------------------------# misc. utils
+# Add _ separator for large Ints
+format(x::Int) = replace(string(x), r"(\d)(?=(\d{3})+(?!\d))" => s"\1_")
 
 #-----------------------------------------------------------------------------# Token
 @enum TokenType begin
-    UNKNOWN_TOKEN       # ?
+    UNKNOWN_TOKEN
     TAGSTART_TOKEN      # <tag
     TAGEND_TOKEN        # >
     TAGCLOSE_TOKEN      # </tag>
@@ -21,71 +24,134 @@ escape(x::AbstractString) = replace(x, escape_chars...)
     ATTRKEY_TOKEN       # attr
     ATTRVAL_TOKEN       # "value"
     TEXT_TOKEN          # between > and <
-    PI_TOKEN            # <? ... ?>
-    DECL_TOKEN          # <?xml ... ?>
+    PI_START_TOKEN      # <?target
+    PI_END_TOKEN        # ?>
+    DECL_START_TOKEN    # <?xml
     COMMENT_TOKEN       # <!-- ... -->
     CDATA_TOKEN         # <![CDATA[ ... ]]>
     DTD_TOKEN           # <!DOCTYPE ... >
     WS_TOKEN            # " \t\n\r"
+    ENTITYREF_TOKEN     # &name;
 end
 
-struct Token{T <: AbstractVector{UInt8}}
+@enum PRESERVE_SPACE_STATE begin
+    DEFAULT
+    PRESERVE
+    CHECK  # Indicates attr key was `xml:space` --> attr value should be checked for "preserve" or "default"
+end
+
+#-----------------------------------------------------------------------------# Token
+struct Token{T <: Union{IO, AbstractVector{UInt8}}}
     data::T
     type::TokenType
-    in_tag::Bool
     i::Int
     j::Int
+    preserve_space::Bool  # Is token inside an `xml:space="preserve"` context
 end
-Token(data) = Token(data, UNKNOWN_TOKEN, false, 1, 0)
-(t::Token)(type, in_tag, j) = Token(t.data, type, in_tag, t.i, j)
+Token(data) = Token(data, UNKNOWN_TOKEN, 1, 0, false)
+(t::Token)(type, j, preserve_space=t.preserve_space) = Token(t.data, type, t.i, j, preserve_space)
 
-# Add _ separator for large Ints
-format(x::Int) = replace(string(x), r"(\d)(?=(\d{3})+(?!\d))" => s"\1_")
+Base.view(t::Token) = view(t.data, t.i:t.j)
+StringViews.StringView(t::Token) = StringView(view(t))
 
 function Base.show(io::IO, t::Token)
     print(io, styled"{bright_yellow:$(rpad(t.type, 19))}", " ", format(t.i), " → ", format(t.j))
     print(io, styled" {bright_black:($(Base.format_bytes(ncodeunits(StringView(t)))))}")
     s = repr(StringView(t))[2:end-1]
-    t.in_tag ?
-        print(io, styled": {inverse:{bright_cyan:$s}}") :
-        print(io, styled": {inverse:{bright_green:$s}}")
+    print(io, styled": {inverse:{bright_green:$s}}")
+    t.preserve_space && print(io, styled" {bright_cyan:(preserve_space)}")
 end
 
-Base.view(t::Token) = view(t.data, t.i:t.j)
-StringViews.StringView(t::Token) = StringView(view(t))
+#-----------------------------------------------------------------------------# Lexer
+struct Lexer{T <: Union{IO, AbstractVector{UInt8}}}
+    data::T
+end
+Base.show(io::IO, o::Lexer) = print(io, "Lexer(", Base.format_bytes(length(o.data)), ')')
 
-function next(t::Token)
-    t.j == length(t.data) && return nothing
-    t = Token(t.data, t.type, t.in_tag, t.j + 1, length(t.data))
-    sv = StringView(t::Token)
+Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
+Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
+# Base.isdone(o::Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
+
+function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
+    prev, stack, in_tag = state
+    (; data, type, preserve_space) = prev
+    i = prev.j + 1
+    i > length(data) && return nothing
+    sv = StringView(@view(data[i:end]))
     c = sv[1]
-
-    if t.in_tag
-        startswith(sv, '>') && return t(TAGEND_TOKEN, false, t.i)
-        startswith(sv, "/>") && return t(TAGSELFCLOSE_TOKEN, false, t.i + 1)
-        c == '"' && return t(ATTRVAL_TOKEN, true, t.i + findnext('"', sv, 2) - 1)
-        c == ''' && return t(ATTRVAL_TOKEN, true, t.i + findnext(''', sv, 2) - 1)
-        is_name_start_char(c) && return t(ATTRKEY_TOKEN, true, t.i + findnext(!is_name_char, sv, 2) - 2)
-        c == '=' && return t(EQUALS_TOKEN, true, t.i)
-    elseif c == '<'
-        c2 = sv[2]
-        is_name_start_char(c2) && return t(TAGSTART_TOKEN, true, t.i + findnext(!is_name_char, sv, 2) - 2)
-        startswith(sv, "</") && return t(TAGCLOSE_TOKEN, false, t.i + findnext('>', sv, 3) - 1)
-        startswith(sv, "<!--") && return t(COMMENT_TOKEN, false, t.i + findnext("-->", sv, 5)[end] - 1)
-        startswith(sv, "<![CDATA[") && return t(CDATA_TOKEN, false, t.i + findnext("]]>", sv, 10)[end] - 1)
-        startswith(sv, "<?xml ") && return t(DECL_TOKEN, false, t.i + findnext("?>", sv, 7)[end] - 1)
-        startswith(sv, "<?") && return t(PI_TOKEN, false, t.i + findnext("?>", sv, 4)[end] - 1)
-        startswith(sv, "<!DOCTYPE") && return t(DTD_TOKEN, false, t.i + findnext('>', sv, 10) - 1)
-    end
-    if is_ws(c)
+    t = if is_ws(c)
         j = findnext(!is_ws, sv, 2)
-        j = isnothing(j) ? length(t.data) : t.i + j - 2
-        return t(WS_TOKEN, t.in_tag, j)
+        j = isnothing(j) ? length(data) : i + j - 2
+        Token(data, WS_TOKEN, i, j, preserve_space)
+    elseif in_tag
+        if is_name_start_char(c)
+            j = findnext(!is_name_char, sv, 2)
+            isnothing(j) && error("Malformed XML: reached end of data while parsing attribute key.")
+            Token(data, ATTRKEY_TOKEN, i, i + j - 2, preserve_space)
+        elseif c == '='
+            Token(data, EQUALS_TOKEN, i, i, preserve_space)
+        elseif c in (''', '"')
+            j = findnext(c, sv, 2)
+            isnothing(j) && error("Malformed XML: reached end of data while parsing attribute value.")
+            Token(data, ATTRVAL_TOKEN, i, i + j - 1, preserve_space)
+        elseif c == '>'
+            in_tag = false
+            Token(data, TAGEND_TOKEN, i, i, preserve_space)
+        elseif startswith(sv, "/>")
+            in_tag = false
+            pop!(stack)
+            Token(data, TAGSELFCLOSE_TOKEN, i, i + 1, preserve_space)
+        elseif startswith(sv, "?>")
+            in_tag = false
+            Token(data, PI_END_TOKEN, i, i + 1, preserve_space)
+        else
+            Token(data, UNKNOWN_TOKEN, i, i, preserve_space)
+        end
+    elseif startswith(sv, "<?xml ")
+        in_tag = true
+        Token(data, DECL_START_TOKEN, i, i + 4, preserve_space)
+    elseif startswith(sv, "<?")
+        j = findnext(x -> is_ws(x) || x == '?', sv, 3)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing processing instruction.")
+        Token(data, PI_START_TOKEN, i, i + j - 2, preserve_space)
+    elseif startswith(sv, "<!--")
+        j = findnext("-->", sv, 5)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing comment.")
+        Token(data, COMMENT_TOKEN, i, i + j[end] - 1, preserve_space)
+    elseif startswith(sv, "<![CDATA[")
+        j = findnext("]]>", sv, 10)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing CDATA.")
+        Token(data, CDATA_TOKEN, i, i + j[end] - 1, preserve_space)
+    elseif startswith(sv, "<!DOCTYPE")
+        j = findnext('>', sv, 10)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing DOCTYPE.")
+        Token(data, DTD_TOKEN, i, i + j - 1, preserve_space)
+    elseif startswith(sv, "</")
+        j = findnext('>', sv, 3)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing closing tag.")
+        pop!(stack)
+        in_tag = false
+        Token(data, TAGCLOSE_TOKEN, i, i + j - 1, preserve_space)
+    elseif c == '<'
+        j = findnext(!is_name_char, sv, 2)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing tag start.")
+        in_tag = true
+        push!(stack, stack[end])
+        Token(data, TAGSTART_TOKEN, i, i + j - 2, preserve_space)
+    elseif c == '&'
+        j = findnext(';', sv, 2)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing entity reference.")
+        Token(data, ENTITYREF_TOKEN, i, i + j - 1, preserve_space)
+    else
+        j = findnext(x -> x ∈ ('<', '&'), sv, 2)
+        isnothing(j) && error("Malformed XML: reached end of data while parsing text.")
+        Token(data, TEXT_TOKEN, i, i + j - 2, preserve_space)
     end
-    return t(TEXT_TOKEN, false, t.i + findnext('<', sv, 2) - 2)
+    return t, (t, stack, in_tag)
 end
 
-is_ws(x::Char) = x == ' ' || x == '\t' || x == '\n' || x == '\r'
+
+is_ws(x::Char) = x in (' ', '\t', '\n', '\r')
 
 function is_name_start_char(c::Char)
     c == ':' || c == '_' ||
@@ -112,108 +178,322 @@ function is_name_char(c::Char)
     ('\u203F' ≤ c ≤ '\u2040')
 end
 
-
-Base.IteratorSize(::Type{T}) where {T <: Token} = Base.SizeUnknown()
-Base.eltype(::Type{T}) where {S, T <: Token{S}} = T
-Base.isdone(o::Token{T}, t::Token{T}) where {T} = t.j == length(t.data)
-function Base.iterate(t::Token, state=t)
-    n = next(state)
-    isnothing(n) && return nothing
-    return (n, n)
-end
-
-tokens(file::AbstractString) = collect(Token(read(file)))
-tokens(io::IO) = collect(Token(read(io)))
+# Base.isdone(o::Token{T}, t::Token{T}) where {T} = t.j == length(t.data)
+# function Base.iterate(t::Token, state=t)
+#     n = next(state)
+#     isnothing(n) && return nothing
+#     return (n, n)
+# end
 
 
-# function metadata(t::Token{T}) where {T}
-#     S = typeof(StringView(t))
-#     out = Pair{Vector{S}, Vector{Pair{S, S}}}[]
-#     tag_stack = S[]
-#     attrs = Vector{Pair{S, S}}[]
-#     for t in t
-#         if t.type ==
+# struct Token{T <: AbstractVector{UInt8}}
+#     data::T
+#     type::TokenType
+#     in_tag::Bool
+#     i::Int
+#     j::Int
+#     stack::Vector{PRESERVE_SPACE_STATE}
+# end
+# Token(data) = Token(data, INIT_TOKEN, false, 1, 0, [DEFAULT])
+# (t::Token)(type, in_tag, j, stack=t.stack) = Token(t.data, type, in_tag, t.i, j, stack)
+
+# # Add _ separator for large Ints
+# format(x::Int) = replace(string(x), r"(\d)(?=(\d{3})+(?!\d))" => s"\1_")
+
+# function Base.show(io::IO, t::Token)
+#     print(io, styled"{bright_yellow:$(rpad(t.type, 19))}", " ", format(t.i), " → ", format(t.j))
+#     print(io, styled" {bright_black:($(Base.format_bytes(ncodeunits(StringView(t)))))}")
+#     s = repr(StringView(t))[2:end-1]
+#     t.stack[end] == PRESERVE ?
+#         print(io, styled": {inverse:{bright_cyan:$s}}") :
+#         print(io, styled": {inverse:{bright_green:$s}}")
+# end
+
+# Base.view(t::Token) = view(t.data, t.i:t.j)
+# StringViews.StringView(t::Token) = StringView(view(t))
+
+# function next(t::Token)
+#     @info t.stack
+#     t.j == length(t.data) && return nothing
+#     t = Token(t.data, t.type, t.in_tag, t.j + 1, length(t.data), t.stack)
+#     sv = StringView(t::Token)
+#     c = sv[1]
+
+#     if t.in_tag
+#         startswith(sv, '>') && return t(TAGEND_TOKEN, false, t.i)
+#         startswith(sv, "/>") && return t(TAGSELFCLOSE_TOKEN, false, t.i + 1, (pop!(t.stack); t.stack))
+#         if c in (''', '"')
+#             out = t(ATTRVAL_TOKEN, true, t.i + findnext(c, sv, 2) - 1)
+#             val = StringView(out)[2:end-1]
+#             if out.stack[end] == CHECK_NEXT
+#                 if val == "preserve"
+#                     out.stack[end] = PRESERVE
+#                 elseif val == "default"
+#                     out.stack[end] = DEFAULT
+#                 end
+#             end
+#             return out
+#         end
+#         if is_name_start_char(c)
+#             out = t(ATTRKEY_TOKEN, true, t.i + findnext(!is_name_char, sv, 2) - 2)
+#             StringView(out) == "xml:space" && (out.stack[end] = CHECK_NEXT)
+#             return out
+#         end
+#         c == '=' && return t(EQUALS_TOKEN, true, t.i)
+#         startswith(sv, "?>") && return t(PI_END_TOKEN, false, t.i + 1)
+#     elseif c == '<'
+#         c2 = sv[2]
+#         if is_name_start_char(c2)
+#             push!(t.stack, t.stack[end])
+#             return t(TAGSTART_TOKEN, true, t.i + findnext(!is_name_char, sv, 2) - 2)
+#         end
+#         startswith(sv, "</") && return t(TAGCLOSE_TOKEN, false, t.i + findnext('>', sv, 3) - 1, (pop!(t.stack); t.stack))
+#         startswith(sv, "<!--") && return t(COMMENT_TOKEN, false, t.i + findnext("-->", sv, 5)[end] - 1)
+#         startswith(sv, "<![CDATA[") && return t(CDATA_TOKEN, false, t.i + findnext("]]>", sv, 10)[end] - 1)
+#         startswith(sv, "<?xml ") && return t(DECL_START_TOKEN, true, t.i + 4)
+#         startswith(sv, "<?") && return t(PI_START_TOKEN, true, t.i + findnext(x -> is_ws(x) || x == '?', sv, 3) - 2)
+#         startswith(sv, "<!DOCTYPE") && return t(DTD_TOKEN, false, t.i + findnext('>', sv, 10) - 1)
+#     end
+#     if is_ws(c)
+#         j = findnext(!is_ws, sv, 2)
+#         j = isnothing(j) ? length(t.data) : t.i + j - 2
+#         return t(WS_TOKEN, t.in_tag, j)
+#     end
+#     return t(TEXT_TOKEN, false, t.i + findnext('<', sv, 2) - 2)
+# end
+
+# is_ws(x::Char) = x == ' ' || x == '\t' || x == '\n' || x == '\r'
+
+# function is_name_start_char(c::Char)
+#     c == ':' || c == '_' ||
+#     ('A' ≤ c ≤ 'Z') || ('a' ≤ c ≤ 'z') ||
+#     ('\u00C0' ≤ c ≤ '\u00D6') ||
+#     ('\u00D8' ≤ c ≤ '\u00F6') ||
+#     ('\u00F8' ≤ c ≤ '\u02FF') ||
+#     ('\u0370' ≤ c ≤ '\u037D') ||
+#     ('\u037F' ≤ c ≤ '\u1FFF') ||
+#     ('\u200C' ≤ c ≤ '\u200D') ||
+#     ('\u2070' ≤ c ≤ '\u218F') ||
+#     ('\u2C00' ≤ c ≤ '\u2FEF') ||
+#     ('\u3001' ≤ c ≤ '\uD7FF') ||
+#     ('\uF900' ≤ c ≤ '\uFDCF') ||
+#     ('\uFDF0' ≤ c ≤ '\uFFFD') ||
+#     ('\U00010000' ≤ c ≤ '\U000EFFFF')
+# end
+# function is_name_char(c::Char)
+#     is_name_start_char(c) ||
+#     c == '-' || c == '.' ||
+#     ('0' ≤ c ≤ '9') ||
+#     c == '\u00B7' ||
+#     ('\u0300' ≤ c ≤ '\u036F') ||
+#     ('\u203F' ≤ c ≤ '\u2040')
+# end
+
+# Base.IteratorSize(::Type{T}) where {T <: Token} = Base.SizeUnknown()
+# Base.eltype(::Type{T}) where {S, T <: Token{S}} = T
+# Base.isdone(o::Token{T}, t::Token{T}) where {T} = t.j == length(t.data)
+# function Base.iterate(t::Token, state=t)
+#     n = next(state)
+#     isnothing(n) && return nothing
+#     return (n, n)
+# end
+
+# tokens(file::AbstractString) = collect(Token(read(file)))
+# tokens(io::IO) = collect(Token(read(io)))
+
+# #-----------------------------------------------------------------------------# Attributes
+# struct Attributes{T} <: AbstractDict{T, T}
+#     keys::Vector{T}
+#     vals::Vector{T}
+# end
+# Attributes(pairs::Pair{S,S}...) where {S} = Attributes{S}(collect(first.(pairs)), collect(last.(pairs)))
+# Attributes{S}(; kw...) where {S} = Attributes{S}([S(k) => S(v) for (k,v) in pairs(kw)]...)
+
+# function Base.show(io::IO, o::Attributes)
+#     isempty(o) || print(io, ' ')
+#     join(io, ["$(k)=$v" for (k,v) in o], " ")
+# end
+
+# Base.keys(o::Attributes) = getfield(o, :keys)
+# Base.values(o::Attributes) = getfield(o, :vals)
+# function Base.getindex(o::Attributes{T}, x) where {T}
+#     i = findfirst(==(x), keys(o))
+#     isnothing(i) ? throw(KeyError(x)) : values(o)[i]
+# end
+# function Base.setindex!(o::Attributes{T}, v, k) where {T}
+#     i = findfirst(==(k), keys(o))
+#     if isnothing(i)
+#         tk, tv = T(k), T(v)
+#         push!(keys(o), tk)
+#         push!(values(o), tv)
+#     else
+#         values(o)[i] = tv
+#     end
+#     return tv
+# end
+# Base.iterate(o::Attributes, x...) = iterate(keys(o) .=> values(o), x...)
+# Base.length(o::Attributes) = length(keys(o))
+
+# #-----------------------------------------------------------------------------# Kind
+# @enum Kind begin
+#     UNKNOWN
+#     CDATA       # <![CDATA[ ... ]]>
+#     COMMENT     # <!-- ... -->
+#     DECLARATION # <?xml ... ?>
+#     DOCUMENT
+#     FRAGMENT
+#     DTD         # <!DOCTYPE ... >
+#     ELEMENT     # <element> ... </element>
+#     PI          # <?name ... ?>
+#     TEXT        # between > and <
+# end
+
+# function (T::Kind)(x...; kw...)
+#     T == CDATA && return Node(CDATA, nothing, nothing, x[1], nothing)
+#     T == COMMENT && return Node(COMMENT, nothing, nothing, x[1], nothing)
+#     T == DECLARATION && return Node(DECLARATION, nothing, Attributes(; kw...), nothing, nothing)
+#     T == DOCUMENT && return Node(DOCUMENT, nothing, nothing, nothing, map(Node, x))
+#     T == FRAGMENT && return Node(FRAGMENT, nothing, nothing, nothing, map(Node, x))
+#     T == DTD && return Node(DTD, nothing, nothing, nothing, nothing)
+#     T == ELEMENT && return Node(ELEMENT, x[1], Attributes(; kw...), nothing, map(Node, x[2:end]))
+#     T == PI && return Node(PI, x[1], nothing, x[2], nothing)
+#     T == TEXT && return Node(TEXT, nothing, nothing, x[1], nothing)
+# end
+
+# function (T::Kind)(s::AbstractString; validate=true)
+#     if T == CDATA
+#         startswith(s, "<![CDATA[") || error("CDATA must start with '<![CDATA[' and end with ']]>'.  Found: $s")
+
 #     end
 # end
 
-#-----------------------------------------------------------------------------# Node
-@enum Kind begin
-    UNKNOWN
-    CDATA       # <![CDATA[ ... ]]>
-    COMMENT     # <!-- ... -->
-    DECLARATION # <?xml ... ?>
-    DOCUMENT
-    FRAGMENT
-    DTD         # <!DOCTYPE ... >
-    ELEMENT     # <element> ... </element>
-    PI          # <?name ... ?>
-    TEXT        # between > and <
-end
 
-struct Node{T <: AbstractString}
-    kind::Kind
-    name::Union{T, Nothing}
-    attributes::Union{Vector{Pair{T, T}}, Nothing}
-    value::Union{T, Nothing}
-    children::Union{Vector{Node{T}}, Nothing}
-end
+# #-----------------------------------------------------------------------------# Node
+# struct Node{T <: AbstractString}
+#     kind::Kind
+#     name::Union{T, Nothing}
+#     attributes::Union{Attributes{T}, Nothing}
+#     value::Union{T, Nothing}
+#     children::Union{Vector{Node{T}}, Nothing}
+# end
 
+# namedtuple(o::T) where {T} = NamedTuple{(fieldnames(T))}(Tuple([getfield(o, x) for x in fieldnames(T)]))
 
-function get_attributes(t::Token)
-    @assert t.type in (TAGSTART_TOKEN, DECL_TOKEN)
-    S = typeof(StringView(t))
-    attributes = Pair{S, S}[]
-    k::Union{S, Nothing} = nothing
-    v::Union{S, Nothing} = nothing
-    for t2 in t
-        if t2.type == ATTRKEY_TOKEN
-            k = StringView(t2)
-        elseif t2.type == ATTRVAL_TOKEN
-            v = StringView(t2)[2:end-1]
-            push!(attributes, k => v)
-        elseif t2.type in (TAGEND_TOKEN, TAGSELFCLOSE_TOKEN)
-            break
-        end
-    end
-    return attributes
-end
+# Base.push!(o::Node, child::Node) = push!(o.children, child)
+
+# Base.show(io::IO, o::Node) = show(io, MIME("application/xml"), o)  #print(io, "Node: ", filter(!isnothing, namedtuple(o)))
+
+# function Base.show(io::IO, M::MIME"application/xml", o::Node)
+#     o.kind == CDATA && return print(io, "<![CDATA[", o.value, "]]>")
+#     o.kind == COMMENT && return print(io, "<!--", o.value, "-->")
+#     o.kind == DECLARATION && return print(io, "<?xml", o.attributes, "?>")
+#     o.kind in (FRAGMENT, DOCUMENT) && return foreach(x -> show(io, M, x), o.children)
+#     o.kind == DTD && return print(io, "<!DOCTYPE ", o.value, ">")
+#     o.kind == PI && return print(io, "<?", o.name, ' ', o.value, "?>")
+#     o.kind == TEXT && return print(io, o.value)
+#     if o.kind == ELEMENT
+#         print(io, '<', o.name, o.attributes, '>')
+#         foreach(x -> show(io, M, x), o.children)
+#         print(io, "</", o.name, '>')
+#     end
+# end
+
+# Base.getindex(o::Node, i::Integer) = getindex(o.children, i)
+# Base.length(o::Node) = length(o.children)
+# Base.lastindex(o::Node) = lastindex(o.children)
 
 
-function parse(t::Token, preserve_space_stack = Bool[false])
-    sv = StringView(t)
-    S = typeof(sv)
-    kind = t.type == TAGSTART_TOKEN ? ELEMENT :
-        t.type == TEXT_TOKEN ? TEXT :
-        t.type == COMMENT_TOKEN ? COMMENT :
-        t.type == CDATA_TOKEN ? CDATA :
-        t.type == DECL_TOKEN ? DECLARATION :
-        t.type == DTD_TOKEN ? DTD :
-        t.type == PI_TOKEN ? PI :
-        error("Parsing a Token must have type TAGSTART_TOKEN, TEXT_TOKEN, COMMENT_TOKEN, CDATA_TOKEN, DECL_TOKEN, DTD_TOKEN, or PI_TOKEN.  Got $(t.type) instead.")
-    if kind == ELEMENT
-        name = sv[2:end]
-        attributes = get_attributes(t)
-        return Node{S}(kind, name, attributes, nothing, children)
-    elseif kind == TEXT
-        return Node{S}(nothing, nothing, nothing, sv, nothing)
-    elseif kind == COMMENT
-        return Node{S}(nothing, nothing, nothing, sv[5:end-3], nothing)
-    elseif kind == CDATA
-        return Node{S}(nothing, nothing, nothing, sv[9:end-3], nothing)
-    elseif kind == DECLARATION
-        attributes = get_attributes(t)
-        return Node{S}(kind, nothing, attributes, nothing, nothing)
-    elseif kind == PI
-        j = findnext(' ', sv, 3)
-        target = sv[3:j-1]
-        content = sv[j+1:end-2]
-        return Node{S}(kind, target, nothing, content, nothing)
-    elseif kind == DTD
-        j = findnext(' ', sv, 10)
-        name = sv[10:j-1]
-        return Node{S}(kind, name, nothing, sv[j+1:end-3], nothing)
-    end
-end
+# #-----------------------------------------------------------------------------# xml
+# xml(o) = sprint(xml, o)
+
+# xml(io::IO, o::Node) = show(io, MIME("application/xml"), o)
+
+# # Starting from `<tag` collect attributes until `>` or `/>`
+# function parse_attributes(t::Token)
+#     t.type in (TAGSTART_TOKEN, DECL_START_TOKEN) || error("`get_attributes` requires Tokens of type TAGSTART_TOKEN.  Found: $(t.type).")
+#     S = typeof(StringView(t))
+#     keys = S[]
+#     vals = S[]
+#     for t2 in t
+#         t2.type == ATTRKEY_TOKEN && push!(keys, StringView(t2))
+#         t2.type == ATTRVAL_TOKEN && push!(vals, StringView(t2))
+#         t2.type in (TAGEND_TOKEN, TAGSELFCLOSE_TOKEN) && return Attributes(keys, vals), t2
+#     end
+#     error("Malformed XML: reached end of tokens before closing '>' of: <$name ...>")
+# end
+
+
+# # returns: (Node, next_token)
+# function _parse(t::Token)
+#     sv = StringView(t)
+#     @info repr(sv)
+#     S = typeof(sv)
+#     if t.type == TAGSTART_TOKEN
+#         name = sv[2:end]
+#         attributes, t = parse_attributes(t)  # t.type here is TAGEND_TOKEN or TAGSELFCLOSE_TOKEN
+#         children = Node{S}[]
+#         t.type == TAGSELFCLOSE_TOKEN && return Node{S}(ELEMENT, name, attributes, nothing, children), next(t)
+#         t = next(t)
+#         stack = 1  # count of open tags with `name`
+#         while stack > 0
+#             sv = StringView(t)
+#             isnothing(t) && error("Malformed XML: reached end of tokens before closing tag </$name>.")
+#             if t.type == TAGCLOSE_TOKEN
+#                 closing_name = sv[3:end-1]  # </name>
+#                 @info "    close: $sv"
+#                 closing_name == name || error("Malformed XML: found closing tag </$closing_name> but expected </$name>.")
+#                 stack -= 1
+#                 if stack == 0
+#                     t = next(t)
+#                     break
+#                 end
+#             else
+#                 child, t = _parse(t)
+#                 push!(children, child)
+#             end
+#         end
+#         return Node{S}(ELEMENT, name, attributes, nothing, children), next(t)
+#     elseif t.type == TEXT_TOKEN
+#         return Node{S}(TEXT, nothing, nothing, sv, nothing), next(t)
+#     elseif t.type == COMMENT_TOKEN
+#         return Node{S}(COMMENT, nothing, nothing, sv[5:end-3], nothing), next(t)
+#     elseif t.type == CDATA_TOKEN
+#         return Node{S}(CDATA, nothing, nothing, sv[9:end-3], nothing), next(t)
+#     elseif t.type == DECL_START_TOKEN
+#         attributes, t = parse_attributes(t)
+#         return Node{S}(DECLARATION, nothing, attributes, nothing, nothing), next(t)
+#     elseif t.type == PI_START_TOKEN
+#         j = findnext(' ', sv, 3)
+#         target = sv[3:j-1]
+#         content = sv[j+1:end-2]
+#         return Node{S}(PI, target, nothing, content, nothing), next(t)
+#     elseif t.type == DTD_TOKEN
+#         j = findnext(' ', sv, 10)
+#         name = sv[10:j-1]
+#         return Node{S}(DTD, name, nothing, sv[j+1:end-3], nothing), next(t)
+#     elseif t.type in (WS_TOKEN, TEXT_TOKEN)
+#         return Node{S}(TEXT, nothing, nothing, sv, nothing), next(t)
+#     else
+#         error("Cannot parse XML Token: $t")
+#     end
+# end
+
+# function parse_all(t::Token)
+#     S = typeof(StringView(t))
+#     children = Node{S}[]
+#     while !isnothing(t)
+#         node, t = _parse(t)
+#         push!(children, node)
+#     end
+#     return children
+# end
+
+
+
+
+
+
+
 
 
 # #-----------------------------------------------------------------------------# Lexer

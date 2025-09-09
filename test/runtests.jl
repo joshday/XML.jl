@@ -18,6 +18,17 @@ end
             end
         end
     end
+    @testset "xml:space=\"preserve\"" begin
+        data = b"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <root xml:space="preserve">
+                This node has preserved space
+                with <child xml:space="default">  default  </child> children.
+            </root>
+            """
+        t = Token(data)
+        
+    end
 end
 
 # using XML: is_next, Text
