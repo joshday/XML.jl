@@ -14,6 +14,29 @@ escape(x::AbstractString) = replace(x, escape_chars...)
 format(x::Int) = replace(string(x), r"(\d)(?=(\d{3})+(?!\d))" => s"\1_")
 
 #-----------------------------------------------------------------------------# Token
+"""
+Enumeration of XML token types:
+
+| Token Type | Decription | Example |
+|------------|:-----------|:-------|
+| UNKNOWN_TOKEN | Unknown token type | ??? |
+| TAGSTART_TOKEN | Start of a tag | `<name` |
+| TAGEND_TOKEN | End of a tag | `>` |
+| TAGCLOSE_TOKEN | Closing tag | `</name>` |
+| TAGSELFCLOSE_TOKEN | Self-closing tag | `/>` |
+| EQUALS_TOKEN | Equals sign | `=` |
+| ATTRKEY_TOKEN | Attribute key | `key` |
+| ATTRVAL_TOKEN | Attribute value | `"value"` |
+| TEXT_TOKEN | Text between tags | `text` |
+| PI_START_TOKEN | Start of processing instruction | `<?target` |
+| PI_END_TOKEN | End of processing instruction | `?>` |
+| DECL_START_TOKEN | Start of XML declaration | `<?xml` |
+| COMMENT_TOKEN | Comment | `<!-- comment -->` |
+| CDATA_TOKEN | CDATA section | `<![CDATA[ ... ]]>` |
+| DTD_TOKEN | Document type declaration | `<!DOCTYPE ... >` |
+| WS_TOKEN | Whitespace | One of `' ', '\\t', '\\r', '\\n'` |
+| ENTITYREF_TOKEN | Entity reference | `&name;` |
+"""
 @enum TokenType begin
     UNKNOWN_TOKEN
     TAGSTART_TOKEN      # <tag
@@ -34,6 +57,15 @@ format(x::Int) = replace(string(x), r"(\d)(?=(\d{3})+(?!\d))" => s"\1_")
     ENTITYREF_TOKEN     # &name;
 end
 
+"""
+Enumeration of xml:space states (used for Lexer iteration):
+
+| State | Description |
+|-------|:------------|
+| DEFAULT | Default whitespace handling (collapse) |
+| PRESERVE | Preserve all whitespace |
+| CHECK | Indicates an attribute key was `xml:space` and the following value should be checked for "preserve" or "default" |
+"""
 @enum PRESERVE_SPACE_STATE begin
     DEFAULT
     PRESERVE
@@ -41,6 +73,12 @@ end
 end
 
 #-----------------------------------------------------------------------------# Token
+"""
+    Token(data::Union{IO, AbstractVector{UInt8}}, type, i, j, preserve_space=false)
+
+A view into `data` from indices `i` to `j` (inclusive) of token type `type`.
+If `preserve_space` is true then this token is inside an `xml:space="preserve"` context.
+"""
 struct Token{T <: Union{IO, AbstractVector{UInt8}}}
     data::T
     type::TokenType
@@ -52,7 +90,7 @@ Token(data) = Token(data, UNKNOWN_TOKEN, 1, 0, false)
 (t::Token)(type, j, preserve_space=t.preserve_space) = Token(t.data, type, t.i, j, preserve_space)
 
 Base.view(t::Token) = view(t.data, t.i:t.j)
-StringViews.StringView(t::Token) = StringView(view(t))
+StringViews.StringView(t::Token) = StringView(t.data)[t.i:t.j]
 
 function Base.show(io::IO, t::Token)
     print(io, styled"{bright_yellow:$(rpad(t.type, 19))}", " ", format(t.i), " → ", format(t.j))
@@ -63,6 +101,19 @@ function Base.show(io::IO, t::Token)
 end
 
 #-----------------------------------------------------------------------------# Lexer
+"""
+    Lexer(data::Union{IO, AbstractVector{UInt8}})
+
+A lexer that tokenizes XML data from an `IO` or `Vector{UInt8}` source.  Tokens are produced by iterating over the lexer.
+
+### Example
+
+    using XML
+
+    lex = XML.Lexer(b"<tag>content</tag>")
+
+    collect(lex)
+"""
 struct Lexer{T <: Union{IO, AbstractVector{UInt8}}}
     data::T
 end
@@ -70,10 +121,10 @@ Base.show(io::IO, o::Lexer) = print(io, "Lexer(", Base.format_bytes(length(o.dat
 
 Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
 Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
-# Base.isdone(o::Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
+Base.isdone(o::Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
 
 function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
-    # stack tracks PRESERVE_SPACE_STATE of nested elements
+    # `stack` tracks PRESERVE_SPACE_STATE of nested elements
     prev, stack, in_tag = state
     (; data, type) = prev
     preserve_space = stack[end] == PRESERVE
@@ -83,10 +134,9 @@ function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
     c = sv[1]
     t = if in_tag  # flips on for `<` and `<?xml`, flips off for `>`, `/>`, and `?>`
         if is_ws(c)
-            # whitespace inside tag is never significant
             j = findnext(!is_ws, sv, 2)
             j = isnothing(j) ? length(data) : i + j - 2
-            Token(data, WS_TOKEN, i, j, false)
+            Token(data, WS_TOKEN, i, j, false)  # WS_TOKEN inside tag is never significant
         elseif is_name_start_char(c)
             j = findnext(!is_name_char, sv, 2)
             isnothing(j) && error("Malformed XML: reached end of data while parsing attribute key.")
@@ -116,7 +166,7 @@ function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
             in_tag = false
             Token(data, PI_END_TOKEN, i, i + 1, preserve_space)
         else
-            Token(data, UNKNOWN_TOKEN, i, i, preserve_space)
+            error("Malformed XML: unexpected character '$(c)' inside tag at position $(i).")
         end
     elseif startswith(sv, "<?xml ")
         in_tag = true
@@ -134,8 +184,18 @@ function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
         isnothing(j) && error("Malformed XML: reached end of data while parsing CDATA.")
         Token(data, CDATA_TOKEN, i, i + j[end] - 1, preserve_space)
     elseif startswith(sv, "<!DOCTYPE")
-        j = findnext('>', sv, 10)
-        isnothing(j) && error("Malformed XML: reached end of data while parsing DOCTYPE.")
+        # Need to find matching '>', ignoring any nested '<...>' from e.g. `<!ELEMENT ...>`
+        count = 0
+        j = i
+        for (_j, c) in enumerate(sv)
+            c == '<' && (count += 1)
+            c == '>' && (count -= 1)
+            if count == 0
+                j = _j
+                break
+            end
+        end
+        j == length(sv) && error("Malformed XML: reached end of data while parsing DOCTYPE.")
         Token(data, DTD_TOKEN, i, i + j - 1, preserve_space)
     elseif startswith(sv, "</")
         j = findnext('>', sv, 3)
@@ -169,6 +229,7 @@ end
 
 is_ws(x::Char) = x in (' ', '\t', '\n', '\r')
 
+# For tag names and attribute keys:
 function is_name_start_char(c::Char)
     c == ':' || c == '_' ||
     ('A' ≤ c ≤ 'Z') || ('a' ≤ c ≤ 'z') ||
@@ -194,128 +255,136 @@ function is_name_char(c::Char)
     ('\u203F' ≤ c ≤ '\u2040')
 end
 
-# Base.isdone(o::Token{T}, t::Token{T}) where {T} = t.j == length(t.data)
-# function Base.iterate(t::Token, state=t)
-#     n = next(state)
-#     isnothing(n) && return nothing
-#     return (n, n)
-# end
+#-----------------------------------------------------------------------------# write
+write(x) = sprint(write, x)
 
+write(io::IO, x::AbstractString) = print(io, escape(x))
 
-# struct Token{T <: AbstractVector{UInt8}}
-#     data::T
-#     type::TokenType
-#     in_tag::Bool
-#     i::Int
-#     j::Int
-#     stack::Vector{PRESERVE_SPACE_STATE}
-# end
-# Token(data) = Token(data, INIT_TOKEN, false, 1, 0, [DEFAULT])
-# (t::Token)(type, in_tag, j, stack=t.stack) = Token(t.data, type, in_tag, t.i, j, stack)
+function write(io::IO, x::T) where {T}
+    Base.isconcretetype(T) || error("Fallback method for XML.write only defined for concrete types.  Found: $T")
+    print(io, "<", T.name.name)
+    for (k, S) in zip(fieldnames(T), fieldtypes(T))
+        print(io, ' ', k, '=', '"', S, '"')
+    end
+    print(io, '>')
+    for (name, val) in zip(fieldnames(T), [getfield(x,f) for f in fieldnames(T)])
+        print(io, '<', name, '>', val, "</", name, '>')
+    end
+    print(io, "</", T.name.name, '>')
+end
 
-# # Add _ separator for large Ints
-# format(x::Int) = replace(string(x), r"(\d)(?=(\d{3})+(?!\d))" => s"\1_")
+#-----------------------------------------------------------------------------# Components
+include("Components.jl")
 
-# function Base.show(io::IO, t::Token)
-#     print(io, styled"{bright_yellow:$(rpad(t.type, 19))}", " ", format(t.i), " → ", format(t.j))
-#     print(io, styled" {bright_black:($(Base.format_bytes(ncodeunits(StringView(t)))))}")
-#     s = repr(StringView(t))[2:end-1]
-#     t.stack[end] == PRESERVE ?
-#         print(io, styled": {inverse:{bright_cyan:$s}}") :
-#         print(io, styled": {inverse:{bright_green:$s}}")
-# end
+#-----------------------------------------------------------------------------# Node
+@enum Kind CData Comment Declaration DTD Document Doctype Element Fragment ProcessingInstruction Text
 
-# Base.view(t::Token) = view(t.data, t.i:t.j)
-# StringViews.StringView(t::Token) = StringView(view(t))
+# The "schema":
+# - CData/Comment/Text: value
+# - Declaration: attributes with keys: version, encoding, standalone
+# - Doctype: value
+# - Document and Fragment: children
+# - Element: name, attributes, children
+# - DTD: (Not used yet)
+# - ProcessingInstruction: name==target, value==data
 
-# function next(t::Token)
-#     @info t.stack
-#     t.j == length(t.data) && return nothing
-#     t = Token(t.data, t.type, t.in_tag, t.j + 1, length(t.data), t.stack)
-#     sv = StringView(t::Token)
-#     c = sv[1]
+struct Node{T}
+    kind::Kind
+    name::Union{T, Nothing}
+    value::Union{T, Nothing}
+    attributes::Union{Dict{T,T}, Nothing}
+    children::Union{Vector{Node{T}}, Nothing}
 
-#     if t.in_tag
-#         startswith(sv, '>') && return t(TAGEND_TOKEN, false, t.i)
-#         startswith(sv, "/>") && return t(TAGSELFCLOSE_TOKEN, false, t.i + 1, (pop!(t.stack); t.stack))
-#         if c in (''', '"')
-#             out = t(ATTRVAL_TOKEN, true, t.i + findnext(c, sv, 2) - 1)
-#             val = StringView(out)[2:end-1]
-#             if out.stack[end] == CHECK_NEXT
-#                 if val == "preserve"
-#                     out.stack[end] = PRESERVE
-#                 elseif val == "default"
-#                     out.stack[end] = DEFAULT
-#                 end
-#             end
-#             return out
-#         end
-#         if is_name_start_char(c)
-#             out = t(ATTRKEY_TOKEN, true, t.i + findnext(!is_name_char, sv, 2) - 2)
-#             StringView(out) == "xml:space" && (out.stack[end] = CHECK_NEXT)
-#             return out
-#         end
-#         c == '=' && return t(EQUALS_TOKEN, true, t.i)
-#         startswith(sv, "?>") && return t(PI_END_TOKEN, false, t.i + 1)
-#     elseif c == '<'
-#         c2 = sv[2]
-#         if is_name_start_char(c2)
-#             push!(t.stack, t.stack[end])
-#             return t(TAGSTART_TOKEN, true, t.i + findnext(!is_name_char, sv, 2) - 2)
-#         end
-#         startswith(sv, "</") && return t(TAGCLOSE_TOKEN, false, t.i + findnext('>', sv, 3) - 1, (pop!(t.stack); t.stack))
-#         startswith(sv, "<!--") && return t(COMMENT_TOKEN, false, t.i + findnext("-->", sv, 5)[end] - 1)
-#         startswith(sv, "<![CDATA[") && return t(CDATA_TOKEN, false, t.i + findnext("]]>", sv, 10)[end] - 1)
-#         startswith(sv, "<?xml ") && return t(DECL_START_TOKEN, true, t.i + 4)
-#         startswith(sv, "<?") && return t(PI_START_TOKEN, true, t.i + findnext(x -> is_ws(x) || x == '?', sv, 3) - 2)
-#         startswith(sv, "<!DOCTYPE") && return t(DTD_TOKEN, false, t.i + findnext('>', sv, 10) - 1)
-#     end
-#     if is_ws(c)
-#         j = findnext(!is_ws, sv, 2)
-#         j = isnothing(j) ? length(t.data) : t.i + j - 2
-#         return t(WS_TOKEN, t.in_tag, j)
-#     end
-#     return t(TEXT_TOKEN, false, t.i + findnext('<', sv, 2) - 2)
-# end
+    function Node{T}(kind, name, value, attributes, children) where {T}
+        name = isnothing(name) ? name : T(name)
+        value = isnothing(value) ? value : T(value)
+        attributes = isnothing(attributes) ? attributes : Dict{T,T}((T(k) => T(v) for (k,v) in pairs(attributes))...)
+        children = isnothing(children) ? children :
+            isempty(children) ? Node{T}[] : Vector{Node{T}}(children)
+        new{T}(kind, name, value, attributes, children)
+    end
+end
+Node(kind, name, value, attributes, children) = Node{String}(kind, name, value, attributes, children)
+Node(s::AbstractString) = Text(s)
 
-# is_ws(x::Char) = x == ' ' || x == '\t' || x == '\n' || x == '\r'
+function (o::Node)(x...; kw...)
+    o.kind == Element || error("Only Element nodes can have children or attributes added.  Found: $(o.kind).")
+    children = [o.children..., Node.(x)...]
+    attrs = merge(o.attributes, Dict((string(k) => string(v) for (k,v) in pairs(kw))...))
+    return Node(o.kind, o.name, o.value, attrs, children)
+end
 
-# function is_name_start_char(c::Char)
-#     c == ':' || c == '_' ||
-#     ('A' ≤ c ≤ 'Z') || ('a' ≤ c ≤ 'z') ||
-#     ('\u00C0' ≤ c ≤ '\u00D6') ||
-#     ('\u00D8' ≤ c ≤ '\u00F6') ||
-#     ('\u00F8' ≤ c ≤ '\u02FF') ||
-#     ('\u0370' ≤ c ≤ '\u037D') ||
-#     ('\u037F' ≤ c ≤ '\u1FFF') ||
-#     ('\u200C' ≤ c ≤ '\u200D') ||
-#     ('\u2070' ≤ c ≤ '\u218F') ||
-#     ('\u2C00' ≤ c ≤ '\u2FEF') ||
-#     ('\u3001' ≤ c ≤ '\uD7FF') ||
-#     ('\uF900' ≤ c ≤ '\uFDCF') ||
-#     ('\uFDF0' ≤ c ≤ '\uFFFD') ||
-#     ('\U00010000' ≤ c ≤ '\U000EFFFF')
-# end
-# function is_name_char(c::Char)
-#     is_name_start_char(c) ||
-#     c == '-' || c == '.' ||
-#     ('0' ≤ c ≤ '9') ||
-#     c == '\u00B7' ||
-#     ('\u0300' ≤ c ≤ '\u036F') ||
-#     ('\u203F' ≤ c ≤ '\u2040')
-# end
+Base.show(io::IO, o::Node) = write(io, o)
 
-# Base.IteratorSize(::Type{T}) where {T <: Token} = Base.SizeUnknown()
-# Base.eltype(::Type{T}) where {S, T <: Token{S}} = T
-# Base.isdone(o::Token{T}, t::Token{T}) where {T} = t.j == length(t.data)
-# function Base.iterate(t::Token, state=t)
-#     n = next(state)
-#     isnothing(n) && return nothing
-#     return (n, n)
-# end
+function write(io::IO, o::Node)
+    if o.kind == CData
+        return print(io, "<![CDATA[", o.value, "]]>")
+    elseif o.kind == Comment
+        return print(io, "<!--", o.value, "-->")
+    elseif o.kind == Declaration
+        print(io, "<?xml version=\"", o.attributes["version"], "\"")
+        haskey(o.attributes, "encoding") && print(io, " encoding=", repr(o.attributes["encoding"]))
+        haskey(o.attributes, "standalone") && print(io, " standalone=", repr(o.attributes["standalone"]))
+        return print(io, "?>")
+    elseif o.kind in (Document, Fragment)
+        return foreach(x -> write(io, x), o.children)
+    elseif o.kind == Doctype
+        return print(io, "<!DOCTYPE ", o.value, '>')
+    elseif o.kind == ProcessingInstruction
+        return print(io, "<?", o.name, ' ', o.value, "?>")
+    elseif o.kind == Text
+        return print(io, escape(o.value))
+    elseif o.kind == Element
+        print(io, '<', o.name)
+        isempty(o.attributes) || print(io, ' ', join(["$(k)=$(repr(v))" for (k,v) in pairs(o.attributes)], ' '))
+        print(io, '>')
+        foreach(x -> write(io, x), o.children)
+        return print(io, "</", o.name, '>')
+    end
 
-# tokens(file::AbstractString) = collect(Token(read(file)))
-# tokens(io::IO) = collect(Token(read(io)))
+end
+
+function (T::Kind)(x...; kw...)
+    if T == CData  # <![CDATA[ ... ]]>
+        isempty(kw) || error("CDATA does not take attributes.")
+        length(x) == 1 || error("CData requires exactly one argument. Found: $(length(x)) arguments.")
+        return Node(CData, nothing, x[1], nothing, nothing)
+    elseif T == Comment  # <!-- ... -->
+        isempty(kw) || error("Comment does not take attributes.")
+        length(x) == 1 || error("Comment requires exactly one argument. Found: $(length(x)) arguments.")
+        return Node(Comment, nothing, x[1], nothing, nothing)
+    elseif T == Declaration  # <?xml ... ?>
+        isempty(setdiff(keys(kw), (:version, :encoding, :standalone))) || error("Declaration only takes `version`, `encoding`, and `standalone` attributes.")
+        isempty(x) || error("Declaration does not take positional arguments.  Found: $(length(x)) arguments.")
+        attrs = Dict((string(k) => string(v) for (k,v) in pairs(kw))...)
+        get(attrs, "standalone", "yes") in ("yes", "no") || error("Declaration `standalone` attribute value must be \"yes\" or \"no\".  Found: $(attrs["standalone"])")
+        return Node(Declaration, nothing, nothing, attrs, nothing)
+    elseif T in (Document, Fragment)
+        isempty(kw) || error("$T does not take attributes.")
+        length(x) > 0 || error("$T requires at least one child node. Found: $(length(x)) arguments.")
+        return Node(T, nothing, nothing, nothing, map(Node, x))
+    elseif T == Doctype  # <!DOCTYPE ... >
+        isempty(kw) || error("Doctype does not take attributes.")
+        0 < length(x) < 4 || error("Doctype requires 1-3 arguments. Found: $(length(x)) arguments.")
+        return Node(Doctype, nothing, nothing, nothing, map(Node, x))
+    elseif T == Element  # <element> ... </element>
+        isempty(x) && error("Element requires at least one argument. Found: $(length(x)) arguments.")
+        attrs = Dict((string(k) => string(v) for (k,v) in pairs(kw))...)
+        return Node(Element, x[1], nothing, attrs, map(Node, x[2:end]))
+    elseif T == ProcessingInstruction  # <?name ... ?>
+        isempty(kw) || error("ProcessingInstruction does not take attributes.")
+        length(x) == 2 || error("ProcessingInstruction requires exactly two arguments. Found: $(length(x)) arguments.")
+        return Node(ProcessingInstruction, x[1], x[2], nothing, nothing)
+    elseif T == Text
+        length(x) == 1 || error("Text requires exactly one argument. Found: $(length(x)) arguments.")
+        isempty(kw) || error("Text does not take attributes.")
+        return Node(Text, nothing, x[1], nothing, nothing)
+    end
+    error("XML: Kind $T not implemented.")
+end
+
+h(name, children...; kw...) = Element(name, children...; kw...)
+Base.getproperty(::typeof(h), tag::Symbol) = h(string(tag))
 
 # #-----------------------------------------------------------------------------# Attributes
 # struct Attributes{T} <: AbstractDict{T, T}

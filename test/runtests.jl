@@ -5,29 +5,17 @@ TEST_FILES = filter(readdir(joinpath(@__DIR__, "data"); join=true)) do file
     endswith(file, r".xml|.kml|.xsd")
 end
 
-#-----------------------------------------------------------------------------# Token
-@testset "Token" begin
-    @testset "Tokenizer covers all bytes of file" begin
-        for file in TEST_FILES
-            @info "Token: $file"
-            toks = tokens(file)
-            i = 1
-            for tok in toks
-                @test tok.i == i
-                i = tok.j + 1
-            end
+#-----------------------------------------------------------------------------# Lexer
+@testset "Lexer" begin
+    for file in TEST_FILES
+        @info "Lexer: $file"
+        lex = XML.Lexer(read(file))
+        i = 1
+        for t in lex
+            @test t.i == i
+            @test t.type != XML.UNKNOWN_TOKEN
+            i = t.j + 1
         end
-    end
-    @testset "xml:space=\"preserve\"" begin
-        data = b"""
-            <?xml version="1.0" encoding="UTF-8"?>
-            <root xml:space="preserve">
-                This node has preserved space
-                with <child xml:space="default">  default  </child> children.
-            </root>
-            """
-        t = Token(data)
-        
     end
 end
 
