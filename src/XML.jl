@@ -73,27 +73,38 @@ Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
 # Base.isdone(o::Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
 
 function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
+    # stack tracks PRESERVE_SPACE_STATE of nested elements
     prev, stack, in_tag = state
-    (; data, type, preserve_space) = prev
+    (; data, type) = prev
+    preserve_space = stack[end] == PRESERVE
     i = prev.j + 1
     i > length(data) && return nothing
     sv = StringView(@view(data[i:end]))
     c = sv[1]
-    t = if is_ws(c)
-        j = findnext(!is_ws, sv, 2)
-        j = isnothing(j) ? length(data) : i + j - 2
-        Token(data, WS_TOKEN, i, j, preserve_space)
-    elseif in_tag
-        if is_name_start_char(c)
+    t = if in_tag  # flips on for `<` and `<?xml`, flips off for `>`, `/>`, and `?>`
+        if is_ws(c)
+            # whitespace inside tag is never significant
+            j = findnext(!is_ws, sv, 2)
+            j = isnothing(j) ? length(data) : i + j - 2
+            Token(data, WS_TOKEN, i, j, false)
+        elseif is_name_start_char(c)
             j = findnext(!is_name_char, sv, 2)
             isnothing(j) && error("Malformed XML: reached end of data while parsing attribute key.")
-            Token(data, ATTRKEY_TOKEN, i, i + j - 2, preserve_space)
+            out = Token(data, ATTRKEY_TOKEN, i, i + j - 2, preserve_space)
+            if StringView(out) == "xml:space"
+                stack[end] = CHECK
+            end
+            out
         elseif c == '='
             Token(data, EQUALS_TOKEN, i, i, preserve_space)
         elseif c in (''', '"')
             j = findnext(c, sv, 2)
             isnothing(j) && error("Malformed XML: reached end of data while parsing attribute value.")
-            Token(data, ATTRVAL_TOKEN, i, i + j - 1, preserve_space)
+            out = Token(data, ATTRVAL_TOKEN, i, i + j - 1, preserve_space)
+            if stack[end] == CHECK
+                stack[end] = StringView(out)[2:end-1] == "preserve" ? PRESERVE : DEFAULT
+            end
+            out
         elseif c == '>'
             in_tag = false
             Token(data, TAGEND_TOKEN, i, i, preserve_space)
@@ -136,13 +147,18 @@ function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
         j = findnext(!is_name_char, sv, 2)
         isnothing(j) && error("Malformed XML: reached end of data while parsing tag start.")
         in_tag = true
-        push!(stack, stack[end])
+        push!(stack, stack[end])  # only place to push new state onto stack
         Token(data, TAGSTART_TOKEN, i, i + j - 2, preserve_space)
     elseif c == '&'
         j = findnext(';', sv, 2)
         isnothing(j) && error("Malformed XML: reached end of data while parsing entity reference.")
         Token(data, ENTITYREF_TOKEN, i, i + j - 1, preserve_space)
-    else
+    elseif is_ws(c)
+        # This whitespace is outside of a tag e.g. `<name ...>`
+        j = findnext(!is_ws, sv, 2)
+        j = isnothing(j) ? length(data) : i + j - 2
+        Token(data, WS_TOKEN, i, j, preserve_space)
+    else # TEXT
         j = findnext(x -> x ∈ ('<', '&'), sv, 2)
         isnothing(j) && error("Malformed XML: reached end of data while parsing text.")
         Token(data, TEXT_TOKEN, i, i + j - 2, preserve_space)
