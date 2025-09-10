@@ -93,10 +93,12 @@ Base.view(t::Token) = view(t.data, t.i:t.j)
 StringViews.StringView(t::Token) = StringView(t.data)[t.i:t.j]
 
 function Base.show(io::IO, t::Token)
-    print(io, styled"{bright_yellow:$(rpad(t.type, 19))}", " ", format(t.i), " → ", format(t.j))
-    print(io, styled" {bright_black:($(Base.format_bytes(ncodeunits(StringView(t)))))}")
+    n = length(t.data)
+    rng_width = 2length(format(n)) + 1
+    print(io, styled"{bright_yellow:$(rpad(t.type, 19))}", rpad(format(t.i) * ":" * format(t.j), rng_width))
+    # print(io, styled"{bright_black:($(Base.format_bytes(ncodeunits(StringView(t)))))}")
     s = repr(StringView(t))[2:end-1]
-    print(io, styled": {inverse:{bright_green:$s}}")
+    print(io, styled" {inverse:{bright_green:$s}}")
     t.preserve_space && print(io, styled" {bright_cyan:(preserve_space)}")
 end
 
@@ -117,7 +119,7 @@ A lexer that tokenizes XML data from an `IO` or `Vector{UInt8}` source.  Tokens 
 struct Lexer{T <: Union{IO, AbstractVector{UInt8}}}
     data::T
 end
-Base.show(io::IO, o::Lexer) = print(io, "Lexer(", Base.format_bytes(length(o.data)), ')')
+Base.show(io::IO, o::Lexer) = print(io, "XML.Lexer(", Base.format_bytes(length(o.data)), ')')
 
 Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
 Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
@@ -340,8 +342,10 @@ function write(io::IO, o::Node)
         print(io, '>')
         foreach(x -> write(io, x), o.children)
         return print(io, "</", o.name, '>')
+    elseif o.kind in (Document, Fragment)
+        return foreach(x -> write(io, x), o.children)
     end
-
+    error("XML.write for Node of kind $(o.kind) not implemented.")  # should be unreachable
 end
 
 function (T::Kind)(x...; kw...)
@@ -380,113 +384,89 @@ function (T::Kind)(x...; kw...)
         isempty(kw) || error("Text does not take attributes.")
         return Node(Text, nothing, x[1], nothing, nothing)
     end
-    error("XML: Kind $T not implemented.")
+    error("XML: $T(x...; kw...) not implemented.")  # should be unreachable
 end
 
 h(name, children...; kw...) = Element(name, children...; kw...)
 Base.getproperty(::typeof(h), tag::Symbol) = h(string(tag))
 
-# #-----------------------------------------------------------------------------# Attributes
-# struct Attributes{T} <: AbstractDict{T, T}
-#     keys::Vector{T}
-#     vals::Vector{T}
-# end
-# Attributes(pairs::Pair{S,S}...) where {S} = Attributes{S}(collect(first.(pairs)), collect(last.(pairs)))
-# Attributes{S}(; kw...) where {S} = Attributes{S}([S(k) => S(v) for (k,v) in pairs(kw)]...)
+#-----------------------------------------------------------------------------# validate
+function validate(o::Node)
+    error("TODO: XML.validate not implemented.")
+end
 
-# function Base.show(io::IO, o::Attributes)
-#     isempty(o) || print(io, ' ')
-#     join(io, ["$(k)=$v" for (k,v) in o], " ")
-# end
+#-----------------------------------------------------------------------------# parse
+struct Parser{T <: Iterators.Stateful}
+    itr::T
+end
+Parser(data::AbstractVector{UInt8}) = Parser(Iterators.Stateful(Lexer(data)))
+Base.show(io::IO, o::Parser) = print(io, "XML.Parser(", Base.format_bytes(length(o.itr.itr.data)), ')')
 
-# Base.keys(o::Attributes) = getfield(o, :keys)
-# Base.values(o::Attributes) = getfield(o, :vals)
-# function Base.getindex(o::Attributes{T}, x) where {T}
-#     i = findfirst(==(x), keys(o))
-#     isnothing(i) ? throw(KeyError(x)) : values(o)[i]
-# end
-# function Base.setindex!(o::Attributes{T}, v, k) where {T}
-#     i = findfirst(==(k), keys(o))
-#     if isnothing(i)
-#         tk, tv = T(k), T(v)
-#         push!(keys(o), tk)
-#         push!(values(o), tv)
-#     else
-#         values(o)[i] = tv
+
+# function Node(p::Parser)
+#     Iterators.reset!(p.itr)
+#     first_tok = peek(p.itr)
+#     S = typeof(StringView(first_tok))
+#     out = Node{S}(Document, nothing, nothing, nothing, Node{S}[])
+#     cursor = Node{S}[]
+#     for t in p.itr
+#         if t.type == WS_TOKEN
+#             t.preserve_space || continue
+#             push!(cursor[end].children, StringV)
+#         end
 #     end
-#     return tv
-# end
-# Base.iterate(o::Attributes, x...) = iterate(keys(o) .=> values(o), x...)
-# Base.length(o::Attributes) = length(keys(o))
-
-# #-----------------------------------------------------------------------------# Kind
-# @enum Kind begin
-#     UNKNOWN
-#     CDATA       # <![CDATA[ ... ]]>
-#     COMMENT     # <!-- ... -->
-#     DECLARATION # <?xml ... ?>
-#     DOCUMENT
-#     FRAGMENT
-#     DTD         # <!DOCTYPE ... >
-#     ELEMENT     # <element> ... </element>
-#     PI          # <?name ... ?>
-#     TEXT        # between > and <
+#     return out
 # end
 
-# function (T::Kind)(x...; kw...)
-#     T == CDATA && return Node(CDATA, nothing, nothing, x[1], nothing)
-#     T == COMMENT && return Node(COMMENT, nothing, nothing, x[1], nothing)
-#     T == DECLARATION && return Node(DECLARATION, nothing, Attributes(; kw...), nothing, nothing)
-#     T == DOCUMENT && return Node(DOCUMENT, nothing, nothing, nothing, map(Node, x))
-#     T == FRAGMENT && return Node(FRAGMENT, nothing, nothing, nothing, map(Node, x))
-#     T == DTD && return Node(DTD, nothing, nothing, nothing, nothing)
-#     T == ELEMENT && return Node(ELEMENT, x[1], Attributes(; kw...), nothing, map(Node, x[2:end]))
-#     T == PI && return Node(PI, x[1], nothing, x[2], nothing)
-#     T == TEXT && return Node(TEXT, nothing, nothing, x[1], nothing)
-# end
+# parsefile(file::AbstractString) = Node(Parser(read(file)))
 
-# function (T::Kind)(s::AbstractString; validate=true)
-#     if T == CDATA
-#         startswith(s, "<![CDATA[") || error("CDATA must start with '<![CDATA[' and end with ']]>'.  Found: $s")
+# function Base.parse(itr)
 
+# function parse_declaration(t)
+#     first_tok = first(t)
+#     first_tok.type == DECL_START_TOKEN || error("`parse_declaration` requires Tokens of type DECL_START_TOKEN.  Found: $(first_tok.type).")
+#     key = StringView(first_tok)
+#     val = StringView(first_tok)
+#     S = typeof(key)
+#     attrs = Dict{S,S}()
+#     for t2 in t
+#         t2.type == ATTRKEY_TOKEN && (key = StringView(t2))
+#         t2.type == ATTRVAL_TOKEN && (val = StringView(t2)[2:end-1]; attrs[key] = val)
+#         t2.type in (TAGEND_TOKEN, TAGSELFCLOSE_TOKEN) && return Node{S}(Declaration, nothing, nothing, attrs, nothing)
 #     end
+#     error("Malformed XML: reached end of tokens before closing '?>' of XML declaration.")
 # end
 
+# function Base.parse(lexer::Lexer{T}) where {T}
+#     S = typeof(StringView(first(lexer)))
+#     out = Node{S}(Document, nothing, nothing, nothing, Node{S}[])
+#     cursor = Node{S}[]
+#     for token in lexer
+#         token.type == WS_TOKEN && !token.preserve_space && continue
 
-# #-----------------------------------------------------------------------------# Node
-# struct Node{T <: AbstractString}
-#     kind::Kind
-#     name::Union{T, Nothing}
-#     attributes::Union{Attributes{T}, Nothing}
-#     value::Union{T, Nothing}
-#     children::Union{Vector{Node{T}}, Nothing}
-# end
-
-# namedtuple(o::T) where {T} = NamedTuple{(fieldnames(T))}(Tuple([getfield(o, x) for x in fieldnames(T)]))
-
-# Base.push!(o::Node, child::Node) = push!(o.children, child)
-
-# Base.show(io::IO, o::Node) = show(io, MIME("application/xml"), o)  #print(io, "Node: ", filter(!isnothing, namedtuple(o)))
-
-# function Base.show(io::IO, M::MIME"application/xml", o::Node)
-#     o.kind == CDATA && return print(io, "<![CDATA[", o.value, "]]>")
-#     o.kind == COMMENT && return print(io, "<!--", o.value, "-->")
-#     o.kind == DECLARATION && return print(io, "<?xml", o.attributes, "?>")
-#     o.kind in (FRAGMENT, DOCUMENT) && return foreach(x -> show(io, M, x), o.children)
-#     o.kind == DTD && return print(io, "<!DOCTYPE ", o.value, ">")
-#     o.kind == PI && return print(io, "<?", o.name, ' ', o.value, "?>")
-#     o.kind == TEXT && return print(io, o.value)
-#     if o.kind == ELEMENT
-#         print(io, '<', o.name, o.attributes, '>')
-#         foreach(x -> show(io, M, x), o.children)
-#         print(io, "</", o.name, '>')
+#             # UNKNOWN_TOKEN
+#             # TAGSTART_TOKEN      # <tag
+#             # TAGEND_TOKEN        # >
+#             # TAGCLOSE_TOKEN      # </tag>
+#             # TAGSELFCLOSE_TOKEN  # />
+#             # EQUALS_TOKEN        # =
+#             # ATTRKEY_TOKEN       # attr
+#             # ATTRVAL_TOKEN       # "value"
+#             # TEXT_TOKEN          # between > and <
+#             # PI_START_TOKEN      # <?target
+#             # PI_END_TOKEN        # ?>
+#             # DECL_START_TOKEN    # <?xml
+#             # COMMENT_TOKEN       # <!-- ... -->
+#             # CDATA_TOKEN         # <![CDATA[ ... ]]>
+#             # DTD_TOKEN           # <!DOCTYPE ... >
+#             # WS_TOKEN            # " \t\n\r"
+#             # ENTITYREF_TOKEN     # &name;
 #     end
 # end
 
-# Base.getindex(o::Node, i::Integer) = getindex(o.children, i)
-# Base.length(o::Node) = length(o.children)
-# Base.lastindex(o::Node) = lastindex(o.children)
 
+#-----------------------------------------------------------------------------# parsefile
+# parsefile(file::AbstractString) = parse(Lexer(read(file)))
 
 # #-----------------------------------------------------------------------------# xml
 # xml(o) = sprint(xml, o)
