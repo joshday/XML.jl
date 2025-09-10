@@ -47,7 +47,7 @@ Enumeration of XML token types:
     ATTRKEY_TOKEN       # attr
     ATTRVAL_TOKEN       # "value"
     TEXT_TOKEN          # between > and <
-    PI_START_TOKEN      # <?target
+    PI_START_TOKEN      # <?target data
     PI_END_TOKEN        # ?>
     DECL_START_TOKEN    # <?xml
     COMMENT_TOKEN       # <!-- ... -->
@@ -174,9 +174,10 @@ function Base.iterate(o::Lexer, state=(Token(o.data), [DEFAULT], false))
         in_tag = true
         Token(data, DECL_START_TOKEN, i, i + 4, preserve_space)
     elseif startswith(sv, "<?")
-        j = findnext(x -> is_ws(x) || x == '?', sv, 3)
+        j = findnext("?>", sv, 3)
+        in_tag = true
         isnothing(j) && error("Malformed XML: reached end of data while parsing processing instruction.")
-        Token(data, PI_START_TOKEN, i, i + j - 2, preserve_space)
+        Token(data, PI_START_TOKEN, i, i + j[1] - 2, preserve_space)
     elseif startswith(sv, "<!--")
         j = findnext("-->", sv, 5)
         isnothing(j) && error("Malformed XML: reached end of data while parsing comment.")
@@ -402,6 +403,58 @@ end
 Parser(data::AbstractVector{UInt8}) = Parser(Iterators.Stateful(Lexer(data)))
 Base.show(io::IO, o::Parser) = print(io, "XML.Parser(", Base.format_bytes(length(o.itr.itr.data)), ')')
 
+function skip_ws!(p::Parser)
+    while true
+        t = peek(p.itr)
+        if t.type == WS_TOKEN && !t.preserve_space
+            t = popfirst!(p.itr)
+        else
+            return t
+        end
+    end
+end
+
+function Node(p::Parser)
+    Iterators.reset!(p.itr)
+    t = skip_ws!(p)
+    S = typeof(StringView(t))
+    children = Node{S}[]
+    while t.j < length(t.data)
+        t = skip_ws!(p)
+        if t.type == DECL_START_TOKEN
+            key = StringView(t)
+            val = StringView(t)
+            attrs = Dict{S,S}()
+            for t2 in p.itr
+                t2.type == ATTRKEY_TOKEN && (key = StringView(t2))
+                t2.type == ATTRVAL_TOKEN && (val = StringView(t2)[2:end-1]; attrs[key] = val)
+                t2.type in (TAGEND_TOKEN, TAGSELFCLOSE_TOKEN) && break
+            end
+            push!(children, Node{S}(Declaration, nothing, nothing, attrs, nothing))
+        elseif t.type == CData
+            push!(children, Node{S}(CData, nothing, StringView(t)[9:end-3], nothing, nothing))
+        elseif t.type == COMMENT_TOKEN
+            push!(children, Node{S}(Comment, nothing, StringView(t)[5:end-3], nothing, nothing))
+        elseif t.type == TEXT_TOKEN
+            push!(children, Node{S}(Text, nothing, StringView(t), nothing, nothing))
+        elseif t.type == PI_START_TOKEN
+            j = findnext(' ', StringView(t), 3)
+            j === nothing && error("Malformed XML: processing instruction missing target and data.")
+            target = StringView(t)[3:j-1]
+            content = StringView(t)[j+1:end-2]
+            push!(children, Node{S}(ProcessingInstruction, target, content, nothing, nothing))
+        elseif t.type == TAGSTART_TOKEN
+            error("TODO")
+        end
+    end
+
+    return children
+end
+
+
+#   DTD Document Doctype Element Fragment ProcessingInstruction
+
+
 
 # function Node(p::Parser)
 #     Iterators.reset!(p.itr)
@@ -418,7 +471,7 @@ Base.show(io::IO, o::Parser) = print(io, "XML.Parser(", Base.format_bytes(length
 #     return out
 # end
 
-# parsefile(file::AbstractString) = Node(Parser(read(file)))
+parsefile(file::AbstractString) = Node(Parser(read(file)))
 
 # function Base.parse(itr)
 
