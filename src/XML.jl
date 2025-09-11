@@ -43,20 +43,6 @@ function Base.show(io::IO, t::Token)
         print(io, styled" {bright_green:{inverse:$s}}")
 end
 
-Base.IteratorSize(::Type{Token{T}}) where {T} = Base.SizeUnknown()
-Base.eltype(::Type{Token{T}}) where {T} = Token{T}
-Base.isdone(o::Token{T}, t::Token{T}) where {T} = t.j == length(t.data)
-
-function Base.iterate(o::Token, state=o)
-    Base.isdone(o, state) && return nothing
-    n = next(state)
-    return (n, n)
-end
-
-..(s::AbstractString, t::Token) = startswith(StringView(t), s)
-..(x::AbstractVector{UInt8}, t::Token) = all(ti == xi for (ti, xi) in zip(view(t), x))
-Base.findnext(x::Char, t::Token, i) = findnext(x, StringView(t), i)
-
 function next((; data, type, i, j)::Token)
     t = Token(data, type, j + 1, length(data))
     b"<?xml " .. t && return t(_DECL, findnext(b"?>", view(t), 6)[2])
@@ -75,6 +61,11 @@ function next((; data, type, i, j)::Token)
     j = findnext(==(UInt8('<')), view(t), 2)
     return j = isnothing(j) ? Token(data, _TEXT, t.i, length(data)) : t(_TEXT, j - 1)
 end
+
+..(s::AbstractString, t::Token) = startswith(StringView(t), s)
+..(x::AbstractVector{UInt8}, t::Token) = all(ti == xi for (ti, xi) in zip(view(t), x))
+Base.findnext(x::Char, t::Token, i) = findnext(x, StringView(t), i)
+
 
 function attributes(t::Token, dict = Dict{stringtype(t), stringtype(t)}())
     t.type in (_DECL, _TAG_OPEN) || error("XML.attributes only defined for _DECL or _TAG_OPEN tokens.  Found: $t")
@@ -128,6 +119,25 @@ function is_name_char(c::Char)
     ('\u203F' ≤ c ≤ '\u2040')
 end
 
+#-----------------------------------------------------------------------------# Lexer
+struct Lexer{T <: AbstractVector{UInt8}}
+    data::T
+end
+Base.show(io::IO, o::Lexer) = print(io, "XML.Lexer(", Base.format_bytes(length(o.data)), ')')
+
+Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
+Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
+Base.isdone(::Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
+
+function Base.iterate(o::Lexer, state=Token(o.data))
+    Base.isdone(o, state) && return nothing
+    n = next(state)
+    return (n, n)
+end
+
+
+
+
 #-----------------------------------------------------------------------------# interface
 kind(o) = getfield(o, :kind)
 value(o) = getfield(o, :value)
@@ -176,6 +186,7 @@ kindfields = Dict(
     ProcessingInstruction => (:value),
     Text => (:value,)
 )
+
 
 
 
