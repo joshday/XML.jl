@@ -45,26 +45,27 @@ end
 
 function next((; data, type, i, j)::Token)
     t = Token(data, type, j + 1, length(data))
-    b"<?xml " .. t && return t(_DECL, findnext(b"?>", view(t), 6)[2])
-    b"<?" .. t && return t(_PI, findnext(b"?>", view(t), 3)[2])
-    b"<!--" .. t && return t(_COMMENT, findnext(b"-->", view(t), 5)[3])
-    b"<![CDATA[" .. t && return t(_CDATA, findnext(b"]]>", view(t), 10)[3])
+    s = StringView(t)
+    "<?xml " .. t && return t(_DECL, findnext("?>", s, 6)[2])
+    "<?" .. t && return t(_PI, findnext("?>", s, 3)[2])
+    "<!--" .. t && return t(_COMMENT, findnext("-->", s, 5)[3])
+    "<![CDATA[" .. t && return t(_CDATA, findnext("]]>", s, 10)[3])
     if "<!" .. t  # <!DOCTYPE
         count = 0
-        for (j, c) in enumerate(view(t))
-            c == UInt8('<') && (count += 1)
-            c == UInt8('>') && (count -= 1; count == 0 && return t(_DTD, j))
+        for (j, c) in enumerate(s)
+            c == '<' && (count += 1)
+            c == '>' && (count -= 1; count == 0 && return t(_DTD, j))
         end
     end
-    b"</" .. t && return t(_TAG_CLOSE, findnext(==(UInt8('>')), view(t), 3))
-    b"<" .. t && return t(_TAG_OPEN, findnext(==(UInt8('>')), view(t), 3))
-    j = findnext(==(UInt8('<')), view(t), 2)
-    return j = isnothing(j) ? Token(data, _TEXT, t.i, length(data)) : t(_TEXT, j - 1)
+    "</" .. t && return t(_TAG_CLOSE, findnext('>', s, 3))
+    "<" .. t && return t(_TAG_OPEN, findnext('>', s, 3))
+    j = findnext('<', s, 2)
+    return j = isnothing(j) ? t(_TEXT, ncodeunits(s)) : t(_TEXT, j - 1)
 end
 
 ..(s::AbstractString, t::Token) = startswith(StringView(t), s)
-..(x::AbstractVector{UInt8}, t::Token) = all(ti == xi for (ti, xi) in zip(view(t), x))
-Base.findnext(x::Char, t::Token, i) = findnext(x, StringView(t), i)
+# ..(x::AbstractVector{UInt8}, t::Token) = all(ti == xi for (ti, xi) in zip(view(t), x))
+# Base.findnext(x::Char, t::Token, i) = findnext(x, StringView(t), i)
 
 
 function attributes(t::Token, dict = Dict{stringtype(t), stringtype(t)}())
@@ -119,24 +120,63 @@ function is_name_char(c::Char)
     ('\u203F' ≤ c ≤ '\u2040')
 end
 
+is_ws(c::Char) = c in (' ', '\t', '\n', '\r')
+
 #-----------------------------------------------------------------------------# Lexer
-struct Lexer{T <: AbstractVector{UInt8}}
+# Iterates Tokens that cover all bytes of data
+# Whitespace is not considered distinct from other text
+struct _Lexer{T <: AbstractVector{UInt8}}
     data::T
 end
-Base.show(io::IO, o::Lexer) = print(io, "XML.Lexer(", Base.format_bytes(length(o.data)), ')')
+Base.show(io::IO, o::_Lexer) = print(io, "XML._Lexer(", Base.format_bytes(length(o.data)), ')')
+Base.IteratorSize(::Type{_Lexer{T}}) where {T} = Base.SizeUnknown()
+Base.eltype(::Type{_Lexer{T}}) where {T} = Token{T}
+Base.isdone(::_Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
 
-Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
-Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
-Base.isdone(::Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
-
-function Base.iterate(o::Lexer, state=Token(o.data))
+function Base.iterate(o::_Lexer, state=Token(o.data))
     Base.isdone(o, state) && return nothing
     n = next(state)
     return (n, n)
 end
 
+# Same as _Lexer, but drops insignificant whitespace
+struct Lexer{T <: AbstractVector{UInt8}}
+    data::T
+end
+Base.show(io::IO, o::Lexer) = print(io, "XML.Lexer(", Base.format_bytes(length(o.data)), ')')
+Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
+Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
+Base.isdone(::Lexer{T}, (t, stack)) where {T} = t.j == length(t.data)
 
-
+function Base.iterate(o::Lexer, (token, stack) = (Token(o.data), [false]))
+    Base.isdone(o, (token, stack)) && return nothing
+    n = next(token)
+    s = StringView(n)
+    if n.type == _TAG_OPEN
+        rng = findfirst("xml:space", s)
+        if isnothing(rng)
+            push!(stack, stack[end])  # inherit space preservation from parent
+        else
+            i = findnext(x -> x in ('"', '''), s, rng[2] + 1)
+            j = findnext(x -> x in ('"', '''), s, i + 1)
+            val = s[i+1:j-1]
+            val == "preserve" ? push!(stack, true) :
+                val == "default" ? push!(stack, false) :
+                error("Malformed XML: xml:space attribute must be \"preserve\" or \"default\": Found: $val.")
+        end
+    elseif n.type == _TAG_CLOSE
+        pop!(stack)
+    end
+    if stack[end] == false
+        if n.type == _TEXT
+            all(is_ws, s) && return iterate(o, (n, stack))
+            i = findfirst(!is_ws, s)
+            j = findlast(!is_ws, s)
+            n = Token(n.data, n.type, n.i + i - 1, n.i + j - 1)
+        end
+    end
+    return (n, (n, stack))
+end
 
 #-----------------------------------------------------------------------------# interface
 kind(o) = getfield(o, :kind)
