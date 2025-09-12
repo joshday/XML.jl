@@ -122,6 +122,21 @@ end
 
 is_ws(c::Char) = c in (' ', '\t', '\n', '\r')
 
+function strip(t::Token)
+    s = StringView(t)
+    while !isempty(s) && is_ws(s[1])
+        t = Token(t.data, t.type, t.i + 1, t.j)
+        s = StringView(t)
+    end
+    while !isempty(s) && is_ws(s[end])
+        t = Token(t.data, t.type, t.i, t.j - 1)
+        s = StringView(t)
+    end
+    return t
+end
+
+has_xml_space_attr(t::Token) = t.type == _TAG_OPEN && !isnothing(findnext("xml:space", StringView(t), 3))
+
 #-----------------------------------------------------------------------------# Lexer
 # Iterates Tokens that cover all bytes of data
 # Whitespace is not considered distinct from other text
@@ -146,37 +161,43 @@ end
 Base.show(io::IO, o::Lexer) = print(io, "XML.Lexer(", Base.format_bytes(length(o.data)), ')')
 Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
 Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
-Base.isdone(::Lexer{T}, (t, stack)) where {T} = t.j == length(t.data)
+Base.isdone(::Lexer{T}, (t, stack)::Tuple{Token{T}, BitVector}) where {T} = t.j == length(t.data)
 
-function Base.iterate(o::Lexer, (token, stack) = (Token(o.data), [false]))
-    Base.isdone(o, (token, stack)) && return nothing
+function Base.iterate(o::Lexer{T}, state::Tuple{Token{T}, BitVector} = (Token(o.data), BitVector([false]))) where {T}
+    (token, stack) = state
+    Base.isdone(o, state) && return nothing
     n = next(token)
+    type = n.type
     s = StringView(n)
-    if n.type == _TAG_OPEN
-        rng = findfirst("xml:space", s)
+    if type == _TAG_OPEN
+        rng = findnext("xml:space", s, 3)
         if isnothing(rng)
-            push!(stack, stack[end])  # inherit space preservation from parent
+            # No xml:space attribute --> inherit from parent
+            push!(stack, stack[end])
         else
+            # xml:space attribute found --> parse value
             i = findnext(x -> x in ('"', '''), s, rng[2] + 1)
             j = findnext(x -> x in ('"', '''), s, i + 1)
             val = s[i+1:j-1]
+            @info typeof(val)
             val == "preserve" ? push!(stack, true) :
                 val == "default" ? push!(stack, false) :
                 error("Malformed XML: xml:space attribute must be \"preserve\" or \"default\": Found: $val.")
         end
-    elseif n.type == _TAG_CLOSE
+    elseif type == _TAG_CLOSE
         pop!(stack)
-    end
-    if stack[end] == false
-        if n.type == _TEXT
-            all(is_ws, s) && return iterate(o, (n, stack))
-            i = findfirst(!is_ws, s)
-            j = findlast(!is_ws, s)
-            n = Token(n.data, n.type, n.i + i - 1, n.i + j - 1)
-        end
+    elseif type == _TEXT && !stack[end]
+        # Skip whitespace, strip other text
+        all(is_ws, s) && return iterate(o, (n, stack))
+        n = strip(n)
     end
     return (n, (n, stack))
 end
+
+
+
+
+
 
 #-----------------------------------------------------------------------------# interface
 kind(o) = getfield(o, :kind)
