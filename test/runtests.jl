@@ -1,5 +1,4 @@
-using XML, Test
-
+using XML, StringViews, Test
 
 TEST_FILES = filter(readdir(joinpath(@__DIR__, "data"); join=true)) do file
     endswith(file, r".xml|.kml|.xsd")
@@ -9,13 +8,82 @@ end
 @testset "Lexer" begin
     for file in TEST_FILES
         # @info "Token: $file"
-        lex = XML._Lexer(read(file))
+        _lex = XML._Lexer(read(file))
+        lex = XML.Lexer(read(file))
         i = 1
-        for t in lex
+        for t in _lex
             @test t.i == i
             i = t.j + 1
         end
+        @test length(collect(_lex)) > length(collect(lex))
     end
+    for (data, typ) in [
+            (b"<!-- comment -->", XML._COMMENT),
+            (b"<![CDATA[ cdata ]]> ", XML._CDATA),
+            (b"<?xml version=\"1.0\"?>", XML._DECL),
+            (b"<!DOCTYPE xml>", XML._DTD),
+            (b"<tag id=\"my_id\">", XML._TAG_OPEN),
+            (b"</tag>", XML._TAG_CLOSE),
+            (b"<?xml-stylesheet href=\"mystyle.css\" type=\"text/css\"?>", XML._PI),
+            (b"Text content", XML._TEXT),
+        ]
+        @test only(XML.Lexer(data)).type == typ
+    end
+end
+
+#-----------------------------------------------------------------------------# Node Parsing
+@testset "Node Parsing" begin
+    for file in TEST_FILES
+        @info file
+        @test XML.Node(read(file)) isa XML.Node{<:StringView}
+    end
+end
+
+#-----------------------------------------------------------------------------# xml:space handling
+@testset "xml:space handling" begin
+    data = b"""
+    <?xml version="1.0" encoding="UTF-8"?>
+    <root xml:space="preserve">
+        This node has preserved space
+        with <child xml:space="default">  default  </child> children.
+    </root>
+    """
+    s = StringView(data)
+    tokens = collect(XML.Lexer(data))
+    # <?xml version="1.0" encoding="UTF-8"?>
+    i = 1
+    j = findfirst('\n', s) - 1
+    @test tokens[1] == XML.Token(data, XML._DECL, i, j, 1)
+    # <root xml:space="preserve">
+    i = findnext('<', s, j + 1)
+    j = findnext('>', s, i)
+    @test tokens[2] == XML.Token(data, XML._TAG_OPEN, i, j, 1)
+    # "This node has preserved space\n with "
+    i = j + 1
+    j = findnext('<', s, i) - 1
+    @test tokens[3] == XML.Token(data, XML._TEXT, i, j, 2)
+    # <child xml:space="default">
+    i = findnext('<', s, j + 1)
+    j = findnext('>', s, i)
+    @test tokens[4] == XML.Token(data, XML._TAG_OPEN, i, j, 2)
+    # "  default  "
+    i = findnext('d', s, j + 1)
+    j = i + length("default") - 1
+    @test tokens[5] == XML.Token(data, XML._TEXT, i, j, 3)
+    # </child>
+    i = findnext('<', s, j + 1)
+    j = findnext('>', s, i)
+    @test tokens[6] == XML.Token(data, XML._TAG_CLOSE, i, j, 2)
+    # " children.\n"
+    i = j + 1
+    j = findnext('<', s, i) - 1
+    @test tokens[7] == XML.Token(data, XML._TEXT, i, j, 2)
+    i = findnext('<', s, j + 1)
+    j = findnext('>', s, i)
+    @test tokens[8] == XML.Token(data, XML._TAG_CLOSE, i, j, 1)
+    @test length(data) == j + 1  # +1 for final '\n'
+
+    @test XML.next(tokens[8]) == XML.Token(data, XML._TEXT, length(data), length(data), 1)
 end
 
 # #-----------------------------------------------------------------------------# Node

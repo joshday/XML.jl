@@ -40,13 +40,8 @@ end
 Token(data) = Token(data, _INIT, 1, 0, 0)
 
 # Change the type/last index of token.  `j` is index of the StringView
-function (t::Token)(type::TokenType, j::Int)
-    depth = t.depth
-    t.type == _INIT && (depth = 1)
-    type == _TAG_CLOSE && (depth -= 1)
-    t.type == _TAG_OPEN && !endswith("/>", StringView(t)) && (depth += 1)
-    Token(t.data, type, t.i, t.i + j - 1, depth)
-end
+(t::Token)(type::TokenType, j::Int, depth::Int=t.depth) = Token(t.data, type, t.i, t.i + j - 1, depth)
+
 
 Base.view(t::Token) = view(t.data, t.i:t.j)
 StringViews.StringView(t::Token) = StringView(view(t))
@@ -66,7 +61,10 @@ function Base.show(io::IO, t::Token)
         print(io, styled" {bright_green:{inverse:$s}}")
 end
 
-function next((; data, type, i, j, depth)::Token)
+function next(prev::Token)
+    (; data, type, j, depth) = prev
+    prev.type == _INIT && (depth = 1)
+    prev.type == _TAG_OPEN && !endswith(StringView(prev), "/>") && (depth += 1)
     t = Token(data, type, j + 1, length(data), depth)
     s = StringView(t)
     "<?xml " .. t && return t(_DECL, findnext("?>", s, 6)[2])
@@ -80,7 +78,7 @@ function next((; data, type, i, j, depth)::Token)
             c == '>' && (count -= 1; count == 0 && return t(_DTD, j))
         end
     end
-    "</" .. t && return t(_TAG_CLOSE, findnext('>', s, 3))
+    "</" .. t && return t(_TAG_CLOSE, findnext('>', s, 3), depth - 1)
     "<" .. t && return t(_TAG_OPEN, findnext('>', s, 3))
     j = findnext('<', s, 2)
     return j = isnothing(j) ? t(_TEXT, ncodeunits(s)) : t(_TEXT, j - 1)
