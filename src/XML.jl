@@ -158,13 +158,16 @@ function Base.iterate(o::AttributeTokens, t = Token(o.t.data, _INIT, o.t.i, o.t.
     i = findnext(is_name_start_char, s, i + 1)
     isnothing(i) && return nothing
     j = findnext(!is_name_char, s, i + 1) - 1
+    isnothing(j) && error("Malformed XML: Attribute key not terminated.")
     key = Token(t.data, _KEY, t.i + i - 1, t.i + j - 1, t.depth)
     # 3) Get Value
     i = findnext(x -> x in ('"', '\''), s, j + 1)
+    isnothing(i) && error("Malformed XML: Attribute value not found for key: $(StringView(key)).")
     c = s[i]
     j = findnext(c, s, i + 1)
+    isnothing(j) && error("Malformed XML: Attribute value not terminated for key: $(StringView(key)).")
     val = Token(t.data, _VAL, t.i + i, t.i + j - 2, t.depth)
-    return (key => val), Token(t.data, _INIT, val.i, o.t.j, val.depth)
+    return (key => val), Token(t.data, _INIT, val.j, o.t.j, val.depth)
 end
 
 attributes(t::Token) = Dict((StringView(k) => StringView(v) for (k,v) in AttributeTokens(t))...)
