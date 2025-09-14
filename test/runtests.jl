@@ -34,7 +34,6 @@ end
 #-----------------------------------------------------------------------------# Node Parsing
 @testset "Node Parsing" begin
     for file in TEST_FILES
-        @info file
         @test XML.Node(read(file)) isa XML.Node{<:StringView}
     end
 end
