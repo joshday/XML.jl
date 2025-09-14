@@ -239,7 +239,6 @@ type2kind(x::TokenType) =
     error("No Kind for TokenType: $x")
 
 
-
 #-----------------------------------------------------------------------------# Node
 struct Node{S}
     kind::Kind
@@ -256,10 +255,14 @@ function Node{S}(n::Node) where {S}
     children = isnothing(n.children) ? nothing : Node{S}.(n.children)
     Node{S}(n.kind, n.value, attributes, children)
 end
+Base.:(==)(a::Node, b::Node) = a.kind == b.kind &&
+    a.value == b.value &&
+    a.attributes == b.attributes &&
+    a.children == b.children
 
-function (o::Node)(x...; kw...)
+function (o::Node{S})(x...; kw...) where {S}
     o.kind == Element || error("Only Element nodes can have children or attributes added.  Found: $(o.kind).")
-    children = [o.children...; Node.(x)...]
+    children = Node{S}[o.children...; Node.(x)...]
     attrs = merge(o.attributes, Dict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...))
     return Node(o.kind, o.value, attrs, children)
 end
