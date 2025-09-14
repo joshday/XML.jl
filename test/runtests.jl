@@ -23,6 +23,8 @@ end
             (b"<?xml version=\"1.0\"?>", XML._DECL),
             (b"<!DOCTYPE xml>", XML._DTD),
             (b"<tag id=\"my_id\">", XML._TAG_OPEN),
+            (b"<tag>", XML._TAG_OPEN),
+            (b"<tag id=\"my_id\" my_id2    =  \"value\">", XML._TAG_OPEN),
             (b"</tag>", XML._TAG_CLOSE),
             (b"<?xml-stylesheet href=\"mystyle.css\" type=\"text/css\"?>", XML._PI),
             (b"Text content", XML._TEXT),
@@ -37,6 +39,7 @@ end
         n = XML.Node(read(file))
         @test n isa XML.Node{<:StringView}
         @test length(n.children) > 0
+        @test n[1].kind == XML.Declaration
     end
 end
 
@@ -67,7 +70,7 @@ end
     i = findnext('<', s, j + 1)
     j = findnext('>', s, i)
     @test tokens[4] == XML.Token(data, XML._TAG_OPEN, i, j, 2)
-    # "  default  "
+    # "  default  "  (should be stripped of whitespace)
     i = findnext('d', s, j + 1)
     j = i + length("default") - 1
     @test tokens[5] == XML.Token(data, XML._TEXT, i, j, 3)
@@ -87,10 +90,40 @@ end
     @test XML.next(tokens[8]) == XML.Token(data, XML._TEXT, length(data), length(data), 1)
 end
 
-# #-----------------------------------------------------------------------------# Node
-# @testset "Creating Nodes via Kind" begin
-#     @test_nowarn XML.CData("text")
-#     @test_nowarn XML.Comment("text")
+#-----------------------------------------------------------------------------# Creating Node via Kind
+@testset "Constructing Node via Kind" begin
+    @testset "CData" begin
+        @test_nowarn XML.CData("text")
+        @test_throws Exception XML.CData("1", "2")
+        @test_throws Exception XML.CData()
+        @test_throws Exception XML.CData(id="test")
+    end
+    @testset "Comment" begin
+        @test_nowarn XML.Comment("text")
+        @test_throws Exception XML.Comment("1", "2")
+        @test_throws Exception XML.Comment()
+        @test_throws Exception XML.Comment(id="test")
+    end
+    @testset "Declaration" begin
+        @test_nowarn XML.Declaration()
+        @test_nowarn XML.Declaration(version="1.0")
+        @test_nowarn XML.Declaration(version="1.0", encoding="UTF-8")
+        @test_nowarn XML.Declaration(version="1.0", encoding="UTF-8", standalone="yes")
+        @test_throws Exception XML.Declaration("1.0")
+        @test_throws Exception XML.Declaration(id="test")
+    end
+    @testset "ProcessingInstruction" begin
+        @test_nowarn XML.ProcessingInstruction("target", "data")
+        @test_throws Exception XML.ProcessingInstruction()
+        @test_throws Exception XML.ProcessingInstruction("target", "data", "extra")
+        @test_throws Exception XML.ProcessingInstruction(target="test")
+    end
+    @testset "Element" begin
+        @test_nowarn XML.Element("tag")
+        @test_nowarn XML.Element("tag", XML.Text("text"))
+        @test_nowarn XML.Element("tag", XML.Text("text"); id="1", key="value")
+    end
+end
 #     @test_nowarn XML.Declaration(version="1.0", encoding="UTF-8")
 #     @test_nowarn XML.ProcessingInstruction("target", "data")
 #     @test_nowarn XML.Element("tag")
