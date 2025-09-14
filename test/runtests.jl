@@ -34,7 +34,9 @@ end
 #-----------------------------------------------------------------------------# Node Parsing
 @testset "Node Parsing" begin
     for file in TEST_FILES
-        @test XML.Node(read(file)) isa XML.Node{<:StringView}
+        n = XML.Node(read(file))
+        @test n isa XML.Node{<:StringView}
+        @test length(n.children) > 0
     end
 end
 
