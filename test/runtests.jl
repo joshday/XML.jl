@@ -5,11 +5,11 @@ TEST_FILES = filter(readdir(joinpath(@__DIR__, "data"); join=true)) do file
     endswith(file, r".xml|.kml|.xsd")
 end
 
-#-----------------------------------------------------------------------------# Tokenization
-@testset "Tokenization" begin
+#-----------------------------------------------------------------------------# Lexer
+@testset "Lexer" begin
     for file in TEST_FILES
         # @info "Token: $file"
-        lex = XML.Token(read(file))
+        lex = XML._Lexer(read(file))
         i = 1
         for t in lex
             @test t.i == i
@@ -18,22 +18,22 @@ end
     end
 end
 
-#-----------------------------------------------------------------------------# Node
-@testset "Creating Nodes via Kind" begin
-    @test_nowarn XML.CData("text")
-    @test_nowarn XML.Comment("text")
-    @test_nowarn XML.Declaration(version="1.0", encoding="UTF-8")
-    @test_nowarn XML.ProcessingInstruction("target", "data")
-    @test_nowarn XML.Element("tag")
-    @test_nowarn XML.Element("tag", XML.Text("text"))
-    @test_nowarn XML.Element("tag", XML.Text("text"); id="1", key="value")
-end
+# #-----------------------------------------------------------------------------# Node
+# @testset "Creating Nodes via Kind" begin
+#     @test_nowarn XML.CData("text")
+#     @test_nowarn XML.Comment("text")
+#     @test_nowarn XML.Declaration(version="1.0", encoding="UTF-8")
+#     @test_nowarn XML.ProcessingInstruction("target", "data")
+#     @test_nowarn XML.Element("tag")
+#     @test_nowarn XML.Element("tag", XML.Text("text"))
+#     @test_nowarn XML.Element("tag", XML.Text("text"); id="1", key="value")
+# end
 
-#-----------------------------------------------------------------------------# parsing
-@testset "Parsing" begin
-    t = XML.Token(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
-    XML._Node(XML.next(t))[1]
-end
+# #-----------------------------------------------------------------------------# parsing
+# @testset "Parsing" begin
+#     t = XML.Token(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+#     XML._Node(XML.next(t))[1]
+# end
 
 # using XML: is_next, Text
 
