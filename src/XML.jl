@@ -1,6 +1,6 @@
 module XML
 
-using StyledStrings, StringViews
+using StyledStrings, StringViews, OrderedCollections
 
 export escape, unescape
 
@@ -15,21 +15,21 @@ format(x::Int) = replace(string(x), r"(\d)(?=(\d{3})+(?!\d))" => s"\1_")
 
 #-----------------------------------------------------------------------------# Token
 @enum TokenType::Int16 begin
-    _INIT
-    _CDATA      # <![CDATA[ ... ]]>
-    _COMMENT    # <!-- ... -->
-    _DECL       # <?xml ... ?>
-    _DTD        # <!DOCTYPE ... >
-    _TAG_CLOSE  # </...>
-    _TAG_OPEN   # <...>
-    _TEXT       # content between >...< as well as whitespace
-    _PI         # <?...?>
-    # Sub-tokens of _DECL and _TAG_OPEN
-    _KEY        # `key` in `key="value"`
-    _VAL        # `"value"` in `key="value"`
+    INIT
+    CDATA      # <![CDATA[ ... ]]>
+    COMMENT    # <!-- ... -->
+    DECL       # <?xml ... ?>
+    DTD        # <!DOCTYPE ... >
+    TAG_CLOSE  # </...>
+    TAG_OPEN   # <...>
+    TEXT       # content between >...< as well as whitespace
+    PI         # <?...?>
+    # AttributeTokens uses these for DECL and TAG_OPEN
+    KEY        # `key` in `key="value"`
+    VAL        # `"value"` in `key="value"`
 end
 
-# A "view" into xml data
+# A "view" into xml data from i:j
 struct Token{T <: AbstractVector{UInt8}}
     data::T
     type::TokenType
@@ -37,7 +37,7 @@ struct Token{T <: AbstractVector{UInt8}}
     j::Int
     depth::Int
 end
-Token(data) = Token(data, _INIT, 1, 0, 0)
+Token(data) = Token(data, INIT, 1, 0, 0)
 
 # Change the type/last index of token.  `j` is index of the StringView
 (t::Token)(type::TokenType, j::Int, depth::Int=t.depth) = Token(t.data, type, t.i, t.i + j - 1, depth)
@@ -50,42 +50,110 @@ stringtype(t::Token) = typeof(StringView(t))
 function Base.show(io::IO, t::Token)
     n = length(t.data)
     w1 = 2length(format(n)) + 1  # largest possible width of "i:j"
-    print(io, styled"{bright_cyan:$(rpad(t.type, 11))}")
+    print(io, styled"{bright_cyan:$(rpad(t.type, 10))}")
     rng = rpad(string(format(t.i), ":", format(t.j)), w1)
     print(io, styled"{bright_black:$(rng)}")
-    print(io, styled" {bright_magenta:$(rpad(t.depth, 2))} ")
+    print(io, styled" {bright_magenta:$(rpad(t.depth, 3))} ")
+    indent = ' ' ^ (2 * (t.depth - 1))
     s = repr(StringView(t))[2:end-1]
-    w2 = max(displaysize(io)[2] - 11 - w1 - 6, 0)
+    pre_s_width = 10 + w1 + 3 + length(indent) + 3
+    w2 = max(displaysize(io)[2] - pre_s_width - 3, 0)
     s = length(s) > w2 ?
-        print(io, styled" {bright_green:{inverse:$(s[1:w2])}…}") :
-        print(io, styled" {bright_green:{inverse:$s}}")
+        print(io, styled"$indent{bright_green:{inverse:$(s[1:w2])}…}") :
+        print(io, styled"$indent{bright_green:{inverse:$s}}")
+end
+
+#-----------------------------------------------------------------------------# FileLexer
+# Iterates Tokens that cover all bytes of data
+# Whitespace is not considered distinct from other text
+struct FileLexer{T <: AbstractVector{UInt8}}
+    data::T
+end
+Base.show(io::IO, o::FileLexer) = print(io, "XML.FileLexer(", Base.format_bytes(length(o.data)), ')')
+Base.IteratorSize(::Type{FileLexer{T}}) where {T} = Base.SizeUnknown()
+Base.eltype(::Type{FileLexer{T}}) where {T} = Token{T}
+Base.isdone(::FileLexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
+
+function Base.iterate(o::FileLexer, state=Token(o.data))
+    Base.isdone(o, state) && return nothing
+    n = next(state)
+    return (n, n)
 end
 
 function next(prev::Token)
     (; data, type, j, depth) = prev
-    prev.type == _INIT && (depth = 1)
-    prev.type == _TAG_OPEN && !endswith(StringView(prev), "/>") && (depth += 1)
+    prev.type == INIT && (depth = 1)
+    prev.type == TAG_OPEN && view(prev)[end-1] != UInt8('/') && (depth += 1)
     t = Token(data, type, j + 1, length(data), depth)
-    s = StringView(t)
-    "<?xml " .. t && return t(_DECL, findnext("?>", s, 6)[2])
-    "<?" .. t && return t(_PI, findnext("?>", s, 3)[2])
-    "<!--" .. t && return t(_COMMENT, findnext("-->", s, 5)[3])
-    "<![CDATA[" .. t && return t(_CDATA, findnext("]]>", s, 10)[3])
-    if "<!" .. t  # <!DOCTYPE
-        count = 0
-        for (j, c) in enumerate(s)
-            c == '<' && (count += 1)
-            c == '>' && (count -= 1; count == 0 && return t(_DTD, j))
-        end
-    end
-    "</" .. t && return t(_TAG_CLOSE, findnext('>', s, 3), depth - 1)
-    "<" .. t && return t(_TAG_OPEN, findnext('>', s, 3))
-    j = findnext('<', s, 2)
-    return j = isnothing(j) ? t(_TEXT, ncodeunits(s)) : t(_TEXT, j - 1)
+    v = view(t)
+    b"<?xml " .. t && return t(DECL, findnext(b"?>", v, 6)[2])
+    b"<?" .. t && return t(PI, findnext(b"?>", v, 3)[2])
+    b"<!--" .. t && return t(COMMENT, findnext(b"-->", v, 5)[3])
+    b"<![CDATA[" .. t && return t(CDATA, findnext(b"]]>", v, 10)[3])
+    b"<!" .. t && return t(DTD, find_dtd_end(v))
+    b"</" .. t && return t(TAG_CLOSE, findnext(==(UInt8('>')), v, 4), depth - 1)
+    b"<" .. t && return t(TAG_OPEN, findnext(==(UInt8('>')), v, 3))
+    return t(TEXT, find_text_end(v))
 end
 
 ..(s::AbstractString, t::Token) = startswith(StringView(t), s)
-# ..(x::AbstractVector{UInt8}, t::Token) = all(ti == xi for (ti, xi) in zip(view(t), x))
+..(x::AbstractVector{UInt8}, t::Token) = all(ti == xi for (ti, xi) in zip(view(t), x))
+
+function find_text_end(x::AbstractVector{UInt8})
+    j = findnext(==(UInt8('<')), x, 2)
+    isnothing(j) ? length(x) : j - 1
+end
+
+function find_dtd_end(x::AbstractVector{UInt8})
+    count = 0
+    for (j, c) in enumerate(x)
+        c == UInt8('<') && (count += 1)
+        c == UInt8('>') && (count -= 1; count == 0 && return j)
+    end
+    error("Malformed XML: DTD not terminated.")
+end
+
+#-----------------------------------------------------------------------------# Lexer
+# Same as FileLexer, but drops insignificant whitespace
+struct Lexer{T <: AbstractVector{UInt8}}
+    data::T
+    has_xmlspace::Bool
+end
+Lexer(data::AbstractVector{UInt8}) = Lexer(data, !isnothing(findfirst(b"xml:space", data)))
+Base.show(io::IO, o::Lexer) = print(io, "XML.Lexer(", Base.format_bytes(length(o.data)), ')')
+Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
+Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
+Base.isdone(::Lexer{T}, (t, stack)::Tuple{Token{T}, Vector{Bool}}) where {T} = t.j == length(t.data)
+
+
+function Base.iterate(o::Lexer{T}, state::Tuple{Token{T}, Vector{Bool}} = (Token(o.data), [false])) where {T}
+    Base.isdone(o, state) && return nothing
+    (prev, stack) = state
+    n = next(prev)
+    (; type) = n
+    v = view(n)
+    if o.has_xmlspace
+        if type == TAG_OPEN
+            m = match(r"xml:space\s*=\s*(['\"])(preserve|default)\1", StringView(n))
+            isnothing(m) ? push!(stack, stack[end]) :
+                m.captures[2] == "preserve" ? push!(stack, true) :
+                m.captures[2] == "default" ? push!(stack, false) :
+                error("Malformed XML: xml:space attribute must be \"preserve\" or \"default\": Found: $(m.captures[2]).")
+        elseif type == TAG_CLOSE || (prev.type == TAG_OPEN && view(prev)[end-1] == UInt8('/'))
+            pop!(stack)
+        elseif type == TEXT && !stack[end]
+            all(is_ws, v) && return iterate(o, (n, stack))
+            n = strip(n)
+        end
+    else
+        if type == TEXT
+            all(is_ws, v) && return iterate(o, (n, stack))
+            n = strip(n)
+        end
+    end
+    return (n, (n, stack))
+end
+
 
 # Returns the next valid XML name in `s`
 function name(s::AbstractString)
@@ -123,6 +191,7 @@ function is_name_char(c::Char)
 end
 
 is_ws(c::Char) = c in (' ', '\t', '\n', '\r')
+is_ws(x::UInt8) = x in (UInt8(' '), UInt8('\t'), UInt8('\n'), UInt8('\r'))
 
 function strip(t::Token)
     s = StringView(t)
@@ -142,14 +211,14 @@ end
 struct AttributeTokens{T <: AbstractVector{UInt8}}
     t::Token{T}
     function AttributeTokens(t::Token{T}) where {T}
-        t.type in (_DECL, _TAG_OPEN) || error("XML.AttributeTokens only defined for _DECL or _TAG_OPEN tokens.  Found: $t")
+        t.type in (DECL, TAG_OPEN) || error("XML.AttributeTokens only defined for DECL or TAG_OPEN tokens.  Found: $t")
         new{T}(t)
     end
 end
 Base.IteratorSize(::Type{AttributeTokens{T}}) where {T} = Base.SizeUnknown()
 Base.eltype(::Type{AttributeTokens{T}}) where {T} = Pair{Token{T}, Token{T}}
 
-function Base.iterate(o::AttributeTokens, t = Token(o.t.data, _INIT, o.t.i, o.t.j, o.t.depth))
+function Base.iterate(o::AttributeTokens, t = Token(o.t.data, INIT, o.t.i, o.t.j, o.t.depth))
     s = StringView(t)
     # 1) Skip whitespace
     i = findfirst(is_ws, s)
@@ -159,99 +228,58 @@ function Base.iterate(o::AttributeTokens, t = Token(o.t.data, _INIT, o.t.i, o.t.
     isnothing(i) && return nothing
     j = findnext(!is_name_char, s, i + 1) - 1
     isnothing(j) && error("Malformed XML: Attribute key not terminated.")
-    key = Token(t.data, _KEY, t.i + i - 1, t.i + j - 1, t.depth)
+    key = Token(t.data, KEY, t.i + i - 1, t.i + j - 1, t.depth)
     # 3) Get Value
     i = findnext(x -> x in ('"', '\''), s, j + 1)
     isnothing(i) && error("Malformed XML: Attribute value not found for key: $(StringView(key)).")
-    c = s[i]
-    j = findnext(c, s, i + 1)
+    j = findnext(s[i], s, i + 1)
     isnothing(j) && error("Malformed XML: Attribute value not terminated for key: $(StringView(key)).")
-    val = Token(t.data, _VAL, t.i + i, t.i + j - 2, t.depth)
-    return (key => val), Token(t.data, _INIT, val.j, o.t.j, val.depth)
+    val = Token(t.data, VAL, t.i + i, t.i + j - 2, t.depth)
+    return (key => val), Token(t.data, INIT, val.j, o.t.j, val.depth)
 end
 
-attributes(t::Token) = Dict((StringView(k) => StringView(v) for (k,v) in AttributeTokens(t))...)
-
-#-----------------------------------------------------------------------------# _Lexer
-# Iterates Tokens that cover all bytes of data
-# Whitespace is not considered distinct from other text
-struct _Lexer{T <: AbstractVector{UInt8}}
-    data::T
-end
-Base.show(io::IO, o::_Lexer) = print(io, "XML._Lexer(", Base.format_bytes(length(o.data)), ')')
-Base.IteratorSize(::Type{_Lexer{T}}) where {T} = Base.SizeUnknown()
-Base.eltype(::Type{_Lexer{T}}) where {T} = Token{T}
-Base.isdone(::_Lexer{T}, t::Token{T}) where {T} = t.j == length(t.data)
-
-function Base.iterate(o::_Lexer, state=Token(o.data))
-    Base.isdone(o, state) && return nothing
-    n = next(state)
-    return (n, n)
-end
-
-#-----------------------------------------------------------------------------# Lexer
-# Same as _Lexer, but drops insignificant whitespace
-struct Lexer{T <: AbstractVector{UInt8}}
-    data::T
-end
-Base.show(io::IO, o::Lexer) = print(io, "XML.Lexer(", Base.format_bytes(length(o.data)), ')')
-Base.IteratorSize(::Type{Lexer{T}}) where {T} = Base.SizeUnknown()
-Base.eltype(::Type{Lexer{T}}) where {T} = Token{T}
-Base.isdone(::Lexer{T}, (t, stack)::Tuple{Token{T}, Vector{Bool}}) where {T} = t.j == length(t.data)
-
-# `stack` tracks the `xml:space` context ("preserve" == true, "default" == false)
-function Base.iterate(o::Lexer{T}, state::Tuple{Token{T}, Vector{Bool}} = (Token(o.data), [false])) where {T}
-    (token, stack) = state
-    Base.isdone(o, state) && return nothing
-    n = next(token)
-    (; type) = n
-    s = StringView(n)
-    if type == _TAG_OPEN
-        # TODO: AttributeTokens faster than regex?  Test and rewrite if so.
-        m = match(r"xml:space\s*=\s*(['\"])(preserve|default)\1", s)
-        isnothing(m) ? push!(stack, stack[end]) :
-            m.captures[2] == "preserve" ? push!(stack, true) :
-            m.captures[2] == "default" ? push!(stack, false) :
-            error("Malformed XML: xml:space attribute must be \"preserve\" or \"default\": Found: $val.")
-    elseif type == _TAG_CLOSE
-        pop!(stack)
-    elseif type == _TEXT && !stack[end]
-        all(is_ws, s) && return iterate(o, (n, stack))
-        n = strip(n)
-    end
-
-    return (n, (n, stack))
-end
-
+attributes(t::Token) = OrderedDict((StringView(k) => StringView(v) for (k,v) in AttributeTokens(t))...)
 
 #-----------------------------------------------------------------------------# Kind
 @enum Kind Unknown CData Comment Declaration Document Doctype Element Fragment ProcessingInstruction Text
 
 type2kind(x::TokenType) =
-    x == _INIT ? Document :
-    x == _CDATA ? CData :
-    x == _COMMENT ? Comment :
-    x == _DECL ? Declaration :
-    x == _DTD ? Doctype :
-    x == _TAG_OPEN ? Element :
-    x == _TEXT ? Text :
-    x == _PI ? ProcessingInstruction :
+    x == INIT ? Document :
+    x == CDATA ? CData :
+    x == COMMENT ? Comment :
+    x == DECL ? Declaration :
+    x == DTD ? Doctype :
+    x == TAG_OPEN ? Element :
+    x == TEXT ? Text :
+    x == PI ? ProcessingInstruction :
     error("No Kind for TokenType: $x")
 
+#-----------------------------------------------------------------------------# LazyNode
+struct LazyNode{T}
+    lexer::Lexer{T}
+    state::Tuple{Token{T}, Vector{Bool}}
+end
+kind(o::LazyNode) = type2kind(o.token.type)
+value(o::LazyNode) = StringView(o.token)
+attributes(o::LazyNode) = attributes(o.token)
 
 #-----------------------------------------------------------------------------# Node
 struct Node{S}
     kind::Kind
     value::Union{S, Nothing}
-    attributes::Union{Dict{S,S}, Nothing}
+    attributes::Union{OrderedDict{S,S}, Nothing}
     children::Union{Vector{Node{S}}, Nothing}
 end
-Base.show(io::IO, o::Node) = write(io, o)
+function Base.show(io::IO, o::Node)
+    print(io, "XML.Node ", styled"{bright_cyan:$(o.kind)}")
+    isnothing(o.attributes) || print(io, styled"{bright_green:$(Attrs(o))}")
+    isnothing(o.children) || print(io, " (", length(o.children), " children)")
+end
 
 Node(s::S) where {S <: AbstractString} = Node{S}(Text, s, nothing, nothing)
 Node(n::Node) = n
 function Node{S}(n::Node) where {S}
-    attributes = isnothing(n.attributes) ? nothing : Dict{S,S}((S(k) => S(v) for (k,v) in pairs(n.attributes))...)
+    attributes = isnothing(n.attributes) ? nothing : OrderedDict{S,S}((S(k) => S(v) for (k,v) in pairs(n.attributes))...)
     children = isnothing(n.children) ? nothing : Node{S}.(n.children)
     Node{S}(n.kind, n.value, attributes, children)
 end
@@ -263,30 +291,30 @@ Base.:(==)(a::Node, b::Node) = a.kind == b.kind &&
 function (o::Node{S})(x...; kw...) where {S}
     o.kind == Element || error("Only Element nodes can have children or attributes added.  Found: $(o.kind).")
     children = Node{S}[o.children...; Node.(x)...]
-    attrs = merge(o.attributes, Dict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...))
+    attrs = merge(o.attributes, OrderedDict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...))
     return Node(o.kind, o.value, attrs, children)
 end
 
-h(tag, children...; kw...) = Node(Element, tag, Dict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...), Node{String}[Node(c) for c in children])
+h(tag, children...; kw...) = Node(Element, tag, OrderedDict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...), Node{String}[Node(c) for c in children])
 Base.getproperty(::typeof(h), x::Symbol) = h(string(x))
 
 function Node(itr::Iterators.Stateful, t::Token{T} = Token(itr.itr.data)) where {T}
     s = StringView(t)
     S = typeof(s)
     depth = t.depth
-    out = t.type == _INIT ? Node{S}(Document, nothing, nothing, Node{S}[]) :
-    t.type == _CDATA ? Node{S}(CData, s[9:end-3], nothing, nothing) :
-    t.type == _COMMENT ? Node{S}(Comment, s[5:end-3], nothing, nothing) :
-    t.type == _DECL ? Node{S}(Declaration, nothing, attributes(t), nothing) :
-    t.type == _DTD ? Node{S}(Doctype, s[10:end-1], nothing, nothing) :
-    t.type == _TEXT ? Node{S}(Text, s, nothing, nothing) :
-    t.type == _PI ? Node{S}(ProcessingInstruction, s[3:end-2], nothing, nothing) :
-    t.type == _TAG_OPEN ? Node{S}(Element, name(t), attributes(t), Node{S}[]) :
+    out = t.type == INIT ? Node{S}(Document, nothing, nothing, Node{S}[]) :
+    t.type == CDATA ? Node{S}(CData, s[9:end-3], nothing, nothing) :
+    t.type == COMMENT ? Node{S}(Comment, s[5:end-3], nothing, nothing) :
+    t.type == DECL ? Node{S}(Declaration, nothing, attributes(t), nothing) :
+    t.type == DTD ? Node{S}(Doctype, s[10:end-1], nothing, nothing) :
+    t.type == TEXT ? Node{S}(Text, s, nothing, nothing) :
+    t.type == PI ? Node{S}(ProcessingInstruction, s[3:end-2], nothing, nothing) :
+    t.type == TAG_OPEN ? Node{S}(Element, name(t), attributes(t), Node{S}[]) :
     error("Cannot create Node from TAG_CLOSE token (this should be unreachable): $t")
     if out.kind in (Document, Fragment, Element)
         for t in itr
             t.depth == depth && break
-            t.type == _TAG_CLOSE && continue
+            t.type == TAG_CLOSE && continue
             push!(out.children, Node(itr, t))
         end
     end
@@ -314,7 +342,7 @@ function (kind::Kind)(args...; kw...)
     elseif kind == Declaration # <?xml ... ?>
         isempty(setdiff(keys(kw), (:version, :encoding, :standalone))) || error("Declaration only takes `version`, `encoding`, and `standalone` attributes.")
         isempty(args) || error("Declaration does not take positional arguments.  Found: $(length(args)) arguments.")
-        attrs = Dict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...)
+        attrs = OrderedDict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...)
         get!(attrs, "version", "1.0")
         get(attrs, "standalone", "yes") in ("yes", "no") || error("Declaration `standalone` attribute value must be \"yes\" or \"no\".  Found: $(attrs["standalone"])")
         return Node(Declaration, nothing, attrs, nothing)
@@ -328,7 +356,7 @@ function (kind::Kind)(args...; kw...)
         return Node(Doctype, join(args, ' '), nothing, nothing)
     elseif kind == Element  # <element> ... </element>
         isempty(args) && error("Element requires at least one argument. Found: $(length(args)) arguments.")
-        attrs = Dict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...)
+        attrs = OrderedDict{String,String}((string(k) => string(v) for (k,v) in pairs(kw))...)
         children = append!(Node{String}[], Node.(args[2:end]))
         return Node(Element, args[1], attrs, children)
     elseif kind == ProcessingInstruction  # <?name ... ?>
@@ -349,6 +377,8 @@ kind(o) = getfield(o, :kind)
 value(o) = getfield(o, :value)
 attributes(o) = getfield(o, :attributes)
 children(o) = getfield(o, :children)
+
+write(o) = sprint(write, o)
 
 function write(io::IO, o)
     k = kind(o)
@@ -392,13 +422,13 @@ Base.print(io::IO, o::Children{T}) where {T} = foreach(x -> write(io, x), o.item
 #     s = StringView(t)
 #     S = stringtype(t)
 #     L = LazyNode{T, S}
-#     typ == _CDATA && return L(t, CData, s[9:end-3], nothing)
-#     typ == _COMMENT && return L(t, Comment, s[5:end-3], nothing)
-#     typ == _DECL && return L(t, Declaration, nothing, attributes(t))
-#     typ == _DTD && return L(t, Doctype, s[10:end-1], nothing)
-#     typ == _TEXT && return L(t, Text, s, nothing)
-#     typ == _PI && return L(t, ProcessingInstruction, s[3:end-2], nothing)
-#     typ == _TAG_OPEN && return L(t, Element, name(t), attributes(t))
+#     typ == CDATA && return L(t, CData, s[9:end-3], nothing)
+#     typ == COMMENT && return L(t, Comment, s[5:end-3], nothing)
+#     typ == DECL && return L(t, Declaration, nothing, attributes(t))
+#     typ == DTD && return L(t, Doctype, s[10:end-1], nothing)
+#     typ == TEXT && return L(t, Text, s, nothing)
+#     typ == PI && return L(t, ProcessingInstruction, s[3:end-2], nothing)
+#     typ == TAG_OPEN && return L(t, Element, name(t), attributes(t))
 #     error("XML.LazyNode cannot be created from token: $t")
 # end
 
@@ -519,13 +549,13 @@ Base.print(io::IO, o::Children{T}) where {T} = foreach(x -> write(io, x), o.item
 # function Node(t::Token)
 #     sv = StringView(t)
 #     S = stringtype(t)
-#     t.type == _CDATA && return Node{S}(CData, nothing, sv[9:end-3], nothing, nothing), t
-#     t.type == _COMMENT && return Node{S}(Comment, nothing , sv[5:end-3], nothing, nothing), t
-#     t.type == _DECL && return Node{S}(Declaration, nothing, nothing, attributes(t), nothing), t
-#     t.type == _DTD && return Node{S}(Doctype, nothing, sv[10:end-1], nothing, nothing), t
-#     t.type == _TEXT && return Node{S}(Text, nothing, sv, nothing, nothing), t
-#     t.type == _PI && return Node{S}(ProcessingInstruction, nothing, sv, nothing, nothing), t
-#     if t.type == _TAG_OPEN
+#     t.type == CDATA && return Node{S}(CData, nothing, sv[9:end-3], nothing, nothing), t
+#     t.type == COMMENT && return Node{S}(Comment, nothing , sv[5:end-3], nothing, nothing), t
+#     t.type == DECL && return Node{S}(Declaration, nothing, nothing, attributes(t), nothing), t
+#     t.type == DTD && return Node{S}(Doctype, nothing, sv[10:end-1], nothing, nothing), t
+#     t.type == TEXT && return Node{S}(Text, nothing, sv, nothing, nothing), t
+#     t.type == PI && return Node{S}(ProcessingInstruction, nothing, sv, nothing, nothing), t
+#     if t.type == TAG_OPEN
 #         out = Node{S}(Element, name(t), nothing, attributes(t), Node{S}[])
 #         endswith(sv, "/>") && return out, t
 #         stack = 1
@@ -533,11 +563,11 @@ Base.print(io::IO, o::Children{T}) where {T} = foreach(x -> write(io, x), o.item
 #             isnothing(t) && return out, t
 #             t = next(t)
 #             isnothing(t) && return out, t
-#             if t.type == _TAG_CLOSE
+#             if t.type == TAG_CLOSE
 #                 stack -= 1
 #                 stack == 0 && return out, t
 #             else
-#                 t.type == _TAG_OPEN && !endswith(StringView(t), "/>") && (stack += 1)
+#                 t.type == TAG_OPEN && !endswith(StringView(t), "/>") && (stack += 1)
 #                 child, t = _Node(t)
 #                 push!(out.children, child)
 #             end
@@ -564,13 +594,13 @@ Base.print(io::IO, o::Children{T}) where {T} = foreach(x -> write(io, x), o.item
 # function _Node(t::Token)
 #     sv = StringView(t)
 #     S = stringtype(t)
-#     t.type == _CDATA && return Node{S}(CData, nothing, sv[9:end-3], nothing, nothing), t
-#     t.type == _COMMENT && return Node{S}(Comment, nothing , sv[5:end-3], nothing, nothing), t
-#     t.type == _DECL && return Node{S}(Declaration, nothing, nothing, attributes(t), nothing), t
-#     t.type == _DTD && return Node{S}(Doctype, nothing, sv[10:end-1], nothing, nothing), t
-#     t.type == _TEXT && return Node{S}(Text, nothing, sv, nothing, nothing), t
-#     t.type == _PI && return Node{S}(ProcessingInstruction, nothing, sv, nothing, nothing), t
-#     if t.type == _TAG_OPEN
+#     t.type == CDATA && return Node{S}(CData, nothing, sv[9:end-3], nothing, nothing), t
+#     t.type == COMMENT && return Node{S}(Comment, nothing , sv[5:end-3], nothing, nothing), t
+#     t.type == DECL && return Node{S}(Declaration, nothing, nothing, attributes(t), nothing), t
+#     t.type == DTD && return Node{S}(Doctype, nothing, sv[10:end-1], nothing, nothing), t
+#     t.type == TEXT && return Node{S}(Text, nothing, sv, nothing, nothing), t
+#     t.type == PI && return Node{S}(ProcessingInstruction, nothing, sv, nothing, nothing), t
+#     if t.type == TAG_OPEN
 #         out = Node{S}(Element, name(t), nothing, attributes(t), Node{S}[])
 #         endswith(sv, "/>") && return out, t
 #         stack = 1
@@ -578,11 +608,11 @@ Base.print(io::IO, o::Children{T}) where {T} = foreach(x -> write(io, x), o.item
 #             isnothing(t) && return out, t
 #             t = next(t)
 #             isnothing(t) && return out, t
-#             if t.type == _TAG_CLOSE
+#             if t.type == TAG_CLOSE
 #                 stack -= 1
 #                 stack == 0 && return out, t
 #             else
-#                 t.type == _TAG_OPEN && !endswith(StringView(t), "/>") && (stack += 1)
+#                 t.type == TAG_OPEN && !endswith(StringView(t), "/>") && (stack += 1)
 #                 child, t = _Node(t)
 #                 push!(out.children, child)
 #             end

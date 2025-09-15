@@ -8,7 +8,7 @@ end
 @testset "Lexer" begin
     for file in TEST_FILES
         # @info "Token: $file"
-        _lex = XML._Lexer(read(file))
+        _lex = XML.FileLexer(read(file))
         lex = XML.Lexer(read(file))
         i = 1
         for t in _lex
@@ -18,19 +18,33 @@ end
         @test length(collect(_lex)) > length(collect(lex))
     end
     for (data, typ) in [
-            (b"<!-- comment -->", XML._COMMENT),
-            (b"<![CDATA[ cdata ]]> ", XML._CDATA),
-            (b"<?xml version=\"1.0\"?>", XML._DECL),
-            (b"<!DOCTYPE xml>", XML._DTD),
-            (b"<tag id=\"my_id\">", XML._TAG_OPEN),
-            (b"<tag>", XML._TAG_OPEN),
-            (b"<tag id=\"my_id\" my_id2    =  \"value\">", XML._TAG_OPEN),
-            (b"</tag>", XML._TAG_CLOSE),
-            (b"<?xml-stylesheet href=\"mystyle.css\" type=\"text/css\"?>", XML._PI),
-            (b"Text content", XML._TEXT),
+            (b"<!-- comment -->", XML.COMMENT),
+            (b"<![CDATA[ cdata ]]> ", XML.CDATA),
+            (b"<?xml version=\"1.0\"?>", XML.DECL),
+            (b"<!DOCTYPE xml>", XML.DTD),
+            (b"<tag id=\"my_id\">", XML.TAG_OPEN),
+            (b"<tag>", XML.TAG_OPEN),
+            (b"<tag id=\"my_id\" my_id2    =  \"value\">", XML.TAG_OPEN),
+            (b"</tag>", XML.TAG_CLOSE),
+            (b"<?xml-stylesheet href=\"mystyle.css\" type=\"text/css\"?>", XML.PI),
+            (b"Text content", XML.TEXT),
         ]
         @test only(XML.Lexer(data)).type == typ
     end
+end
+
+#-----------------------------------------------------------------------------# AttributeTokens
+@testset "AttributeTokens" begin
+    _attrs(x) = Dict{String,String}(StringView(k) => StringView(v) for (k, v) in XML.AttributeTokens(only(XML.Lexer(x))))
+
+    @test _attrs(b"<tag />") == Dict{String,String}()
+    @test _attrs(b"<tag>") == Dict{String,String}()
+    @test _attrs(b"<tag >") == Dict{String,String}()
+
+    @test _attrs(b"<tag id=\"id\" />") == Dict("id" => "id")
+    @test _attrs(b"<tag id = \"id\" />") == Dict("id" => "id")
+    @test _attrs(b"<xml:tag id ='id' id2=\"id2\"  >") == Dict("id" => "id", "id2" => "id2")
+    @test _attrs(b"<tag my:complicated:key='value' >") == Dict("my:complicated:key" => "value")
 end
 
 #-----------------------------------------------------------------------------# Node Parsing
@@ -57,37 +71,37 @@ end
     # <?xml version="1.0" encoding="UTF-8"?>
     i = 1
     j = findfirst('\n', s) - 1
-    @test tokens[1] == XML.Token(data, XML._DECL, i, j, 1)
+    @test tokens[1] == XML.Token(data, XML.DECL, i, j, 1)
     # <root xml:space="preserve">
     i = findnext('<', s, j + 1)
     j = findnext('>', s, i)
-    @test tokens[2] == XML.Token(data, XML._TAG_OPEN, i, j, 1)
+    @test tokens[2] == XML.Token(data, XML.TAG_OPEN, i, j, 1)
     # "This node has preserved space\n with "
     i = j + 1
     j = findnext('<', s, i) - 1
-    @test tokens[3] == XML.Token(data, XML._TEXT, i, j, 2)
+    @test tokens[3] == XML.Token(data, XML.TEXT, i, j, 2)
     # <child xml:space="default">
     i = findnext('<', s, j + 1)
     j = findnext('>', s, i)
-    @test tokens[4] == XML.Token(data, XML._TAG_OPEN, i, j, 2)
+    @test tokens[4] == XML.Token(data, XML.TAG_OPEN, i, j, 2)
     # "  default  "  (should be stripped of whitespace)
     i = findnext('d', s, j + 1)
     j = i + length("default") - 1
-    @test tokens[5] == XML.Token(data, XML._TEXT, i, j, 3)
+    @test tokens[5] == XML.Token(data, XML.TEXT, i, j, 3)
     # </child>
     i = findnext('<', s, j + 1)
     j = findnext('>', s, i)
-    @test tokens[6] == XML.Token(data, XML._TAG_CLOSE, i, j, 2)
+    @test tokens[6] == XML.Token(data, XML.TAG_CLOSE, i, j, 2)
     # " children.\n"
     i = j + 1
     j = findnext('<', s, i) - 1
-    @test tokens[7] == XML.Token(data, XML._TEXT, i, j, 2)
+    @test tokens[7] == XML.Token(data, XML.TEXT, i, j, 2)
     i = findnext('<', s, j + 1)
     j = findnext('>', s, i)
-    @test tokens[8] == XML.Token(data, XML._TAG_CLOSE, i, j, 1)
+    @test tokens[8] == XML.Token(data, XML.TAG_CLOSE, i, j, 1)
     @test length(data) == j + 1  # +1 for final '\n'
 
-    @test XML.next(tokens[8]) == XML.Token(data, XML._TEXT, length(data), length(data), 1)
+    @test XML.next(tokens[8]) == XML.Token(data, XML.TEXT, length(data), length(data), 1)
 end
 
 #-----------------------------------------------------------------------------# Creating Node via Kind
