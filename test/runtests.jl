@@ -104,6 +104,27 @@ end
     @test XML.next(tokens[8]) == XML.Token(data, XML.TEXT, length(data), length(data), 1)
 end
 
+@testset "xml:space handling 2" begin
+    tokens = collect(XML.Lexer(b"""
+    <root>
+        <child xml:space="preserve"> yes </child>
+        <child>  no </child>
+        <child xml:space="preserve">
+            <subchild> yes </subchild>
+            <subchild xml:space="default">  no<subchild2>  no </subchild2>  </subchild>
+        </child>
+        <child> no </child>
+    </root>
+    """))
+    for t in tokens
+        if t.type == XML.TEXT
+            s = StringView(t)
+            occursin("yes", s) && @test occursin(' ', s)
+            occursin("no", s) && @test !occursin(' ', s)
+        end
+    end
+end
+
 #-----------------------------------------------------------------------------# Creating Node via Kind
 @testset "Constructing Node via Kind" begin
     @testset "CData" begin
