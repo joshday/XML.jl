@@ -11,7 +11,7 @@ using Test
 # internet, URL gone) is silently skipped — only parsing failures count as test
 # failures.
 #
-# Run standalone:  julia --project test/test_remote_files.jl
+# Not included in runtests.jl — run standalone:  julia --project test/test_remote_files.jl
 
 function _try_download(url::AbstractString)::Union{String, Nothing}
     try
