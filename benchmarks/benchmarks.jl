@@ -7,6 +7,9 @@ using BenchmarkTools
 using DataFrames
 using UnicodePlots
 
+include("XMarkGenerator.jl")
+using .XMarkGenerator
+
 BenchmarkTools.DEFAULT_PARAMETERS.seconds = 10
 BenchmarkTools.DEFAULT_PARAMETERS.samples = 20000
 
@@ -14,6 +17,15 @@ BenchmarkTools.DEFAULT_PARAMETERS.samples = 20000
 # Small file (~120 lines)
 small_file = joinpath(@__DIR__, "..", "test", "data", "books.xml")
 small_xml = read(small_file, String)
+
+# Medium file (generated XMark auction XML, ~14 MB)
+medium_file = joinpath(@__DIR__, "data", "xmark.xml")
+if !isfile(medium_file)
+    mkpath(dirname(medium_file))
+    @info "Generating XMark benchmark XML..."
+    generate_xmark(medium_file, 1.0)
+end
+medium_xml = read(medium_file, String)
 
 df = DataFrame(kind=String[], name=String[], bench=BenchmarkTools.Trial[])
 
@@ -31,10 +43,26 @@ end
 @add_benchmark "Parse (small)" "LightXML" LightXML.parse_string($small_xml)
 @add_benchmark "Parse (small)" "XMLDict" XMLDict.xml_dict($small_xml)
 
+#-----------------------------------------------------------------------------# Parse (medium)
+@add_benchmark "Parse (medium)" "XML.jl" parse($medium_xml, Node)
+@add_benchmark "Parse (medium)" "EzXML" EzXML.parsexml($medium_xml)
+@add_benchmark "Parse (medium)" "LightXML" LightXML.parse_string($medium_xml)
+@add_benchmark "Parse (medium)" "XMLDict" XMLDict.xml_dict($medium_xml)
+
 #-----------------------------------------------------------------------------# Write (small)
 @add_benchmark "Write (small)" "XML.jl" XML.write(o) setup=(o = parse(small_xml, Node))
 @add_benchmark "Write (small)" "EzXML" sprint(print, o) setup=(o = EzXML.parsexml(small_xml))
 @add_benchmark "Write (small)" "LightXML" LightXML.save_file(o, f) setup=(o = LightXML.parse_string(small_xml); f = tempname()) teardown=(LightXML.free(o); rm(f, force=true))
+
+#-----------------------------------------------------------------------------# Write (medium)
+@add_benchmark "Write (medium)" "XML.jl" XML.write(o) setup=(o = parse(medium_xml, Node))
+@add_benchmark "Write (medium)" "EzXML" sprint(print, o) setup=(o = EzXML.parsexml(medium_xml))
+@add_benchmark "Write (medium)" "LightXML" LightXML.save_file(o, f) setup=(o = LightXML.parse_string(medium_xml); f = tempname()) teardown=(LightXML.free(o); rm(f, force=true))
+
+#-----------------------------------------------------------------------------# Read from file
+@add_benchmark "Read file" "XML.jl" read($medium_file, Node)
+@add_benchmark "Read file" "EzXML" EzXML.readxml($medium_file)
+@add_benchmark "Read file" "LightXML" LightXML.parse_file($medium_file)
 
 #-----------------------------------------------------------------------------# Collect element tags
 function xml_collect_tags(node)
@@ -75,9 +103,13 @@ function _lightxml_collect_tags!(out, el::LightXML.XMLElement)
     end
 end
 
-@add_benchmark "Collect tags" "XML.jl" xml_collect_tags(o) setup=(o = parse(small_xml, Node))
-@add_benchmark "Collect tags" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(small_xml))
-@add_benchmark "Collect tags" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(small_xml)) teardown=(LightXML.free(o))
+@add_benchmark "Collect tags (small)" "XML.jl" xml_collect_tags(o) setup=(o = parse(small_xml, Node))
+@add_benchmark "Collect tags (small)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(small_xml))
+@add_benchmark "Collect tags (small)" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(small_xml)) teardown=(LightXML.free(o))
+
+@add_benchmark "Collect tags (medium)" "XML.jl" xml_collect_tags(o) setup=(o = parse(medium_xml, Node))
+@add_benchmark "Collect tags (medium)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(medium_xml))
+@add_benchmark "Collect tags (medium)" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(medium_xml)) teardown=(LightXML.free(o))
 
 #-----------------------------------------------------------------------------# Results
 function plot_group(df, kind)
