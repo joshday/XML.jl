@@ -2725,3 +2725,7 @@ end
         @test length(results) == 3
     end
 end
+
+include("test_pugixml.jl")
+include("test_libexpat.jl")
+include("test_w3c.jl")
