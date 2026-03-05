@@ -197,3 +197,54 @@ XML.jl doesn't automatically escape special characters (`<`, `>`, `&`, `"`, `'`)
 
 - `XML.escape(::String)` / `XML.unescape(::String)` -- transform strings.
 - `XML.escape!(::Node)` / `XML.unescape!(::Node)` -- transform an entire node tree in-place.
+
+<br>
+
+# Benchmarks
+
+Details in the benchmark file: [benchmarks.jl](benchmarks/benchmarks.jl)
+
+
+```
+============================================================
+  BENCHMARK RESULTS
+============================================================
+
+                      Parse (small) — median time (ms)
+
+     XML.jl  ■■■■■■ 0.031916
+      EzXML  ■■■■ 0.025125
+   LightXML  ■■■■■ 0.029959
+    XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.23125
+
+
+                      Write (small) — median time (ms)
+
+     XML.jl  ■■■■■■■■■■■■ 0.027667
+      EzXML  ■■■■ 0.010375
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.093584
+
+
+                       Collect tags — median time (ms)
+
+     XML.jl  ■■■■■■ 0.000579122
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■ 0.0021084
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.00360413
+```
+
+```julia
+versioninfo()
+# Julia Version 1.12.5
+# Commit 5fe89b8ddc1 (2026-02-09 16:05 UTC)
+# Build Info:
+#   Official https://julialang.org release
+# Platform Info:
+#   OS: macOS (arm64-apple-darwin24.0.0)
+#   CPU: 10 × Apple M1 Pro
+#   WORD_SIZE: 64
+#   LLVM: libLLVM-18.1.7 (ORCJIT, apple-m1)
+#   GC: Built with stock GC
+# Threads: 8 default, 1 interactive, 8 GC (on 8 virtual cores)
+# Environment:
+#   JULIA_NUM_THREADS = auto
+```

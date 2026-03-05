@@ -1119,8 +1119,9 @@ end
         joinpath(@__DIR__, "data", "xml.xsd"),
         joinpath(@__DIR__, "data", "kml.xsd"),
         joinpath(@__DIR__, "data", "books.xml"),
-        # example.kml uses invalid <![CData[...]]> (lowercase), skip it
+        # example.kml uses invalid <![CData[...]]> (lowercase), skip roundtrip
         joinpath(@__DIR__, "data", "simple_dtd.xml"),
+        joinpath(@__DIR__, "data", "preserve.xml"),
     ])
 
     for path in all_files
@@ -1201,6 +1202,50 @@ end
         dtd_nodes = filter(x -> nodetype(x) == DTD, children(doc))
         @test length(dtd_nodes) == 1
         @test contains(value(dtd_nodes[1]), "ENTITY")
+    end
+
+    @testset "preserve.xml" begin
+        path = joinpath(@__DIR__, "data", "preserve.xml")
+        isfile(path) || return
+        doc = read(path, Node)
+        @test nodetype(doc) == Document
+
+        root = filter(x -> nodetype(x) == Element, children(doc))[1]
+        @test tag(root) == "root"
+        @test root["xml:space"] == "preserve"
+
+        child_els = filter(x -> nodetype(x) == Element, children(root))
+        @test length(child_els) == 1
+        @test tag(child_els[1]) == "child"
+        @test child_els[1]["xml:space"] == "default"
+    end
+
+    @testset "example.kml" begin
+        # example.kml uses invalid <![CData[...]]> (lowercase 'd') which is not valid XML
+        path = joinpath(@__DIR__, "data", "example.kml")
+        isfile(path) || return
+        @test_throws ArgumentError read(path, Node)
+    end
+
+    @testset "tv.dtd" begin
+        path = joinpath(@__DIR__, "data", "tv.dtd")
+        isfile(path) || return
+        dtd_text = read(path, String)
+        pd = parse_dtd("TVSCHEDULE [\n" * dtd_text * "\n]")
+        @test pd.root == "TVSCHEDULE"
+
+        @test length(pd.elements) == 10
+        elem_names = map(e -> e.name, pd.elements)
+        @test "TVSCHEDULE" in elem_names
+        @test "CHANNEL" in elem_names
+        @test "PROGRAMSLOT" in elem_names
+        @test "TITLE" in elem_names
+
+        @test length(pd.attributes) == 5
+        attr_elements = map(a -> a.element, pd.attributes)
+        @test "TVSCHEDULE" in attr_elements
+        @test "CHANNEL" in attr_elements
+        @test "TITLE" in attr_elements
     end
 end
 
