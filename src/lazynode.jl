@@ -198,8 +198,14 @@ function is_simple(n::LazyNode)
     length(ch) == 1 && ch[1].nodetype in (Text, CData)
 end
 
-simple_value(n::LazyNode) = is_simple(n) ? value(children(n)[1]) :
-    error("`simple_value` is only defined for simple nodes.")
+function simple_value(n::LazyNode)
+    n.nodetype === Element || error("`simple_value` is only defined for simple nodes.")
+    attrs = attributes(n)
+    (!isnothing(attrs) && !isempty(attrs)) && error("`simple_value` is only defined for simple nodes.")
+    ch = children(n)
+    length(ch) == 1 && ch[1].nodetype in (Text, CData) || error("`simple_value` is only defined for simple nodes.")
+    value(ch[1])
+end
 
 #-----------------------------------------------------------------------------# indexing
 Base.getindex(n::LazyNode, i::Integer) = children(n)[i]
@@ -224,8 +230,11 @@ function Base.show(io::IO, n::LazyNode)
         printstyled(io, ' ', repr(value(n)))
     elseif nt === Element
         printstyled(io, " <", tag(n); color=:light_cyan)
-        for k in keys(n)
-            print(io, ' ', k, '=', '"', get(n, k, ""), '"')
+        attrs = attributes(n)
+        if !isnothing(attrs)
+            for (k, v) in attrs
+                print(io, ' ', k, '=', '"', v, '"')
+            end
         end
         printstyled(io, '>'; color=:light_cyan)
     elseif nt === DTD
@@ -234,8 +243,11 @@ function Base.show(io::IO, n::LazyNode)
         printstyled(io, '>'; color=:light_cyan)
     elseif nt === Declaration
         printstyled(io, " <?xml"; color=:light_cyan)
-        for k in keys(n)
-            print(io, ' ', k, '=', '"', get(n, k, ""), '"')
+        attrs = attributes(n)
+        if !isnothing(attrs)
+            for (k, v) in attrs
+                print(io, ' ', k, '=', '"', v, '"')
+            end
         end
         printstyled(io, "?>"; color=:light_cyan)
     elseif nt === ProcessingInstruction

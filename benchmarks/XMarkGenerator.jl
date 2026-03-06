@@ -85,10 +85,6 @@ rand_zip(rng) = string(lpad(rand(rng, 0:99999), 5, '0'))
 rand_cc(rng) = join(rand(rng, 1000:9999, 4), " ")
 rand_email(rng) = string(lowercase(rand(rng, FIRST_NAMES)), rand(rng, 1:999), "@", lowercase(rand(rng, LAST_NAMES)), ".com")
 
-function rand_id(prefix, n)
-    string(prefix, n)
-end
-
 #-----------------------------------------------------------------# XML writing helpers
 function xml_escape_char(io::IO, c::Char)
     if c == '&';     print(io, "&amp;")
@@ -143,7 +139,7 @@ end
 
 function write_annotation(rng, io, indent, n_people)
     println(io, indent, "<annotation>")
-    println(io, indent, "  <author person=\"", rand_id("person", rand(rng, 1:n_people)), "\"/>")
+    println(io, indent, "  <author person=\"", string("person",rand(rng, 1:n_people)), "\"/>")
     write_description(rng, io, string(indent, "  "))
     println(io, indent, "  <happiness>", rand(rng, 1:10), "</happiness>")
     println(io, indent, "</annotation>")
@@ -152,7 +148,7 @@ end
 #-----------------------------------------------------------------# Section writers
 function write_item(rng, io, id, n_categories)
     featured = rand(rng) < 0.1 ? " featured=\"yes\"" : ""
-    println(io, "      <item id=\"", rand_id("item", id), "\"", featured, ">")
+    println(io, "      <item id=\"", string("item",id), "\"", featured, ">")
     println(io, "        <location>", rand(rng, CITIES), "</location>")
     println(io, "        <quantity>", rand(rng, 1:50), "</quantity>")
     println(io, "        <name>", rand_word(rng), " ", rand_word(rng), " ", rand_word(rng), "</name>")
@@ -160,7 +156,7 @@ function write_item(rng, io, id, n_categories)
     write_description(rng, io, "        ")
     println(io, "        <shipping>", rand(rng, SHIPPING), "</shipping>")
     for _ in 1:rand(rng, 1:3)
-        println(io, "        <incategory category=\"", rand_id("category", rand(rng, 1:n_categories)), "\"/>")
+        println(io, "        <incategory category=\"", string("category",rand(rng, 1:n_categories)), "\"/>")
     end
     println(io, "        <mailbox>")
     for _ in 1:rand(rng, 0:5)
@@ -180,7 +176,7 @@ end
 function write_categories(rng, io, n)
     println(io, "  <categories>")
     for i in 1:n
-        println(io, "    <category id=\"", rand_id("category", i), "\">")
+        println(io, "    <category id=\"", string("category",i), "\">")
         println(io, "      <name>", rand_word(rng), " ", rand_word(rng), "</name>")
         write_description(rng, io, "      ")
         println(io, "    </category>")
@@ -191,8 +187,8 @@ end
 function write_catgraph(rng, io, n_edges, n_categories)
     println(io, "  <catgraph>")
     for _ in 1:n_edges
-        from = rand_id("category", rand(rng, 1:n_categories))
-        to = rand_id("category", rand(rng, 1:n_categories))
+        from = string("category",rand(rng, 1:n_categories))
+        to = string("category",rand(rng, 1:n_categories))
         println(io, "    <edge from=\"", from, "\" to=\"", to, "\"/>")
     end
     println(io, "  </catgraph>")
@@ -201,7 +197,7 @@ end
 function write_people(rng, io, n, n_categories, n_open)
     println(io, "  <people>")
     for i in 1:n
-        println(io, "    <person id=\"", rand_id("person", i), "\">")
+        println(io, "    <person id=\"", string("person",i), "\">")
         println(io, "      <name>", rand(rng, FIRST_NAMES), " ", rand(rng, LAST_NAMES), "</name>")
         println(io, "      <emailaddress>", rand_email(rng), "</emailaddress>")
         if rand(rng) < 0.8
@@ -229,7 +225,7 @@ function write_people(rng, io, n, n_categories, n_open)
             income = rand(rng) < 0.8 ? string(" income=\"", rand(rng, 10000.0:0.01:250000.0), "\"") : ""
             println(io, "      <profile", income, ">")
             for _ in 1:rand(rng, 0:4)
-                println(io, "        <interest category=\"", rand_id("category", rand(rng, 1:n_categories)), "\"/>")
+                println(io, "        <interest category=\"", string("category",rand(rng, 1:n_categories)), "\"/>")
             end
             if rand(rng) < 0.8
                 println(io, "        <education>", rand(rng, EDUCATIONS), "</education>")
@@ -246,7 +242,7 @@ function write_people(rng, io, n, n_categories, n_open)
         if n_open > 0 && rand(rng) < 0.3
             println(io, "      <watches>")
             for _ in 1:rand(rng, 1:5)
-                println(io, "        <watch open_auction=\"", rand_id("open_auction", rand(rng, 1:n_open)), "\"/>")
+                println(io, "        <watch open_auction=\"", string("open_auction",rand(rng, 1:n_open)), "\"/>")
             end
             println(io, "      </watches>")
         end
@@ -258,7 +254,7 @@ end
 function write_open_auctions(rng, io, n, n_items, n_people)
     println(io, "  <open_auctions>")
     for i in 1:n
-        println(io, "    <open_auction id=\"", rand_id("open_auction", i), "\">")
+        println(io, "    <open_auction id=\"", string("open_auction",i), "\">")
         println(io, "      <initial>", rand_price(rng), "</initial>")
         if rand(rng) < 0.5
             println(io, "      <reserve>", rand_price(rng), "</reserve>")
@@ -267,7 +263,7 @@ function write_open_auctions(rng, io, n, n_items, n_people)
             println(io, "      <bidder>")
             println(io, "        <date>", rand_date(rng), "</date>")
             println(io, "        <time>", rand_time(rng), "</time>")
-            println(io, "        <personref person=\"", rand_id("person", rand(rng, 1:n_people)), "\"/>")
+            println(io, "        <personref person=\"", string("person",rand(rng, 1:n_people)), "\"/>")
             println(io, "        <increase>", rand_price(rng), "</increase>")
             println(io, "      </bidder>")
         end
@@ -275,8 +271,8 @@ function write_open_auctions(rng, io, n, n_items, n_people)
         if rand(rng) < 0.3
             println(io, "      <privacy>", rand(rng, ["Yes", "No"]), "</privacy>")
         end
-        println(io, "      <itemref item=\"", rand_id("item", rand(rng, 1:n_items)), "\"/>")
-        println(io, "      <seller person=\"", rand_id("person", rand(rng, 1:n_people)), "\"/>")
+        println(io, "      <itemref item=\"", string("item",rand(rng, 1:n_items)), "\"/>")
+        println(io, "      <seller person=\"", string("person",rand(rng, 1:n_people)), "\"/>")
         write_annotation(rng, io, "      ", n_people)
         println(io, "      <quantity>", rand(rng, 1:10), "</quantity>")
         println(io, "      <type>", rand(rng, ["Regular", "Featured"]), "</type>")
@@ -293,12 +289,12 @@ function write_closed_auctions(rng, io, n, n_open, n_items, n_people)
     println(io, "  <closed_auctions>")
     for i in 1:n
         println(io, "    <closed_auction>")
-        println(io, "      <seller person=\"", rand_id("person", rand(rng, 1:n_people)), "\"/>")
-        println(io, "      <buyer person=\"", rand_id("person", rand(rng, 1:n_people)), "\"/>")
+        println(io, "      <seller person=\"", string("person",rand(rng, 1:n_people)), "\"/>")
+        println(io, "      <buyer person=\"", string("person",rand(rng, 1:n_people)), "\"/>")
         # Use item IDs that don't overlap with open auctions
         item_id = n_open + i
         item_id = item_id <= n_items ? item_id : rand(rng, 1:n_items)
-        println(io, "      <itemref item=\"", rand_id("item", item_id), "\"/>")
+        println(io, "      <itemref item=\"", string("item",item_id), "\"/>")
         println(io, "      <price>", rand_price(rng), "</price>")
         println(io, "      <date>", rand_date(rng), "</date>")
         println(io, "      <quantity>", rand(rng, 1:10), "</quantity>")
