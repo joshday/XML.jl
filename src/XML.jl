@@ -4,7 +4,7 @@ include("tokenizer.jl")
 using .XMLTokenizer
 
 export
-    Node, NodeType,
+    Node, LazyNode, NodeType,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
     nodetype, tag, attributes, value, children,
     is_simple, simple_value,
@@ -215,6 +215,15 @@ function siblings(child::Node, root::Node)
 end
 
 include("xpath.jl")
+include("lazynode.jl")
+
+"""
+    XML.mmap(filename, LazyNode) -> LazyNode
+
+Memory-map `filename` and return a `LazyNode` backed by a `StringView`.
+Requires `using StringViews` to activate.
+"""
+function mmap end
 
 #-----------------------------------------------------------------------------# _to_node
 _to_node(n::Node{String}) = n
@@ -909,7 +918,6 @@ end
 
 #-----------------------------------------------------------------------------# deprecations
 Base.@deprecate_binding simplevalue simple_value false
-Base.@deprecate_binding LazyNode Node false
 
 # Removed types — informative errors
 struct Raw

@@ -65,9 +65,9 @@ export tokenize, tag_name, attr_value, pi_target, TokenKind, Token,
 end
 
 #-----------------------------------------------------------------------# Token
-struct Token
+struct Token{S <: AbstractString}
     kind::TokenKind
-    raw::SubString{String}
+    raw::SubString{S}
 end
 
 function Base.show(io::IO, t::Token)
@@ -89,22 +89,23 @@ end
 end
 
 #-----------------------------------------------------------------------# Tokenizer
-mutable struct Tokenizer
-    const data::String
+mutable struct Tokenizer{S <: AbstractString}
+    const data::S
     pos::Int
     state::_State
-    pending::Union{Token,Nothing}
+    pending::Union{Token{S},Nothing}
 end
 
 """
-    tokenize(xml::String) -> Tokenizer
+    tokenize(xml::AbstractString) -> Tokenizer
 
 Return a lazy iterator of `Token`s over the XML string `xml`.
 """
-tokenize(xml::String) = Tokenizer(xml, 1, _S_DEFAULT, nothing)
+tokenize(xml::AbstractString) = Tokenizer(xml, 1, _S_DEFAULT, nothing)
+tokenize(xml::AbstractString, pos::Int) = Tokenizer(xml, pos, _S_DEFAULT, nothing)
 
-Base.IteratorSize(::Type{Tokenizer}) = Base.SizeUnknown()
-Base.eltype(::Type{Tokenizer}) = Token
+Base.IteratorSize(::Type{<:Tokenizer}) = Base.SizeUnknown()
+Base.eltype(::Type{Tokenizer{S}}) where {S} = Token{S}
 
 function Base.iterate(t::Tokenizer, _=nothing)
     tok = _next_token!(t)
