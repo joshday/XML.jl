@@ -1,8 +1,5 @@
 module XML
 
-include("tokenizer.jl")
-using .XMLTokenizer
-
 export
     Node, LazyNode, NodeType,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
@@ -11,6 +8,9 @@ export
     depth, siblings,
     xpath,
     h
+
+include("XMLTokenizer.jl")
+using .XMLTokenizer
 
 #-----------------------------------------------------------------------------# escape/unescape
 const escape_chars = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '\'' => "&apos;", '"' => "&quot;")
@@ -395,18 +395,54 @@ function Base.show(io::IO, o::Node)
 end
 
 #-----------------------------------------------------------------------------# show (text/xml)
+
+# Write XML-escaped content directly to IO (single pass, no intermediate string)
+function _write_escaped(io::IO, s::String)
+    start = 1
+    i = 1
+    n = ncodeunits(s)
+    @inbounds while i <= n
+        b = codeunit(s, i)
+        esc = if b == UInt8('&'); "&amp;"
+        elseif b == UInt8('<'); "&lt;"
+        elseif b == UInt8('>'); "&gt;"
+        elseif b == UInt8('"'); "&quot;"
+        elseif b == UInt8('\''); "&apos;"
+        else
+            i += 1
+            continue
+        end
+        i > start && GC.@preserve s Base.unsafe_write(io, pointer(s, start), (i - start) % UInt)
+        print(io, esc)
+        i += 1
+        start = i
+    end
+    start <= n && GC.@preserve s Base.unsafe_write(io, pointer(s, start), (n - start + 1) % UInt)
+    nothing
+end
+
+# Cached indentation strings to avoid repeated allocation
+const _MAX_CACHED_INDENT = 64
+const _INDENT_STRINGS = [" " ^ n for n in 0:_MAX_CACHED_INDENT]
+@inline function _indent_str(n::Int)
+    0 <= n <= _MAX_CACHED_INDENT && return @inbounds _INDENT_STRINGS[n + 1]
+    " " ^ n
+end
+
 function _print_attrs(io::IO, attributes)
     isnothing(attributes) && return
     for (k, v) in attributes
-        print(io, ' ', k, '=', '"', escape(v), '"')
+        print(io, ' ', k, "=\"")
+        _write_escaped(io, v)
+        print(io, '"')
     end
 end
 
 function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::Bool=false)
-    pad = preserve ? "" : ' ' ^ (indent * depth)
+    pad = preserve ? "" : _indent_str(indent * depth)
     nt = node.nodetype
     if nt === Text
-        print(io, escape(node.value))
+        _write_escaped(io, node.value)
     elseif nt === Element
         # Check xml:space on this element
         child_preserve = preserve

@@ -13,21 +13,25 @@ Supports the same read-only interface as `Node`: [`nodetype`](@ref), [`tag`](@re
 """
 struct LazyNode{S <: AbstractString}
     data::S
-    pos::Int
+    token::Token{S}
     nodetype::NodeType
 end
 
+LazyNode(data::S, ::Type{Document}) where {S <: AbstractString} =
+    LazyNode{S}(data, Token(TOKEN_TEXT, SubString(data, 1, 0)), Document)
+
 nodetype(n::LazyNode) = n.nodetype
 
-_lazy_tokenizer(n::LazyNode) = tokenize(n.data, n.pos)
+_lazy_pos(n::LazyNode) = n.token.raw.offset + 1
+_lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 
 #-----------------------------------------------------------------------------# tag / value
 function tag(n::LazyNode)
     nt = n.nodetype
     if nt === Element
-        return String(tag_name(first(_lazy_tokenizer(n))))
+        return String(tag_name(n.token))
     elseif nt === ProcessingInstruction
-        return String(pi_target(first(_lazy_tokenizer(n))))
+        return String(pi_target(n.token))
     end
     nothing
 end
@@ -35,7 +39,7 @@ end
 function value(n::LazyNode)
     nt = n.nodetype
     if nt === Text
-        return unescape(first(_lazy_tokenizer(n)).raw)
+        return unescape(n.token.raw)
     elseif nt === Comment
         iter = _lazy_tokenizer(n)
         iterate(iter)  # COMMENT_OPEN
@@ -136,26 +140,25 @@ function _lazy_collect_children(data::S, iter) where {S <: AbstractString}
     result = LazyNode{S}[]
     for tok in iter
         k = tok.kind
-        pos = tok.raw.offset + 1
         if k === TOKEN_TEXT
-            push!(result, LazyNode(data, pos, Text))
+            push!(result, LazyNode(data, tok, Text))
         elseif k === TOKEN_OPEN_TAG
-            push!(result, LazyNode(data, pos, Element))
+            push!(result, LazyNode(data, tok, Element))
             _lazy_skip_element!(iter)
         elseif k === TOKEN_COMMENT_OPEN
-            push!(result, LazyNode(data, pos, Comment))
+            push!(result, LazyNode(data, tok, Comment))
             _lazy_skip_until!(iter, TOKEN_COMMENT_CLOSE)
         elseif k === TOKEN_CDATA_OPEN
-            push!(result, LazyNode(data, pos, CData))
+            push!(result, LazyNode(data, tok, CData))
             _lazy_skip_until!(iter, TOKEN_CDATA_CLOSE)
         elseif k === TOKEN_PI_OPEN
-            push!(result, LazyNode(data, pos, ProcessingInstruction))
+            push!(result, LazyNode(data, tok, ProcessingInstruction))
             _lazy_skip_until!(iter, TOKEN_PI_CLOSE)
         elseif k === TOKEN_XML_DECL_OPEN
-            push!(result, LazyNode(data, pos, Declaration))
+            push!(result, LazyNode(data, tok, Declaration))
             _lazy_skip_until!(iter, TOKEN_XML_DECL_CLOSE)
         elseif k === TOKEN_DOCTYPE_OPEN
-            push!(result, LazyNode(data, pos, DTD))
+            push!(result, LazyNode(data, tok, DTD))
             _lazy_skip_until!(iter, TOKEN_DOCTYPE_CLOSE)
         elseif k === TOKEN_CLOSE_TAG
             break
@@ -216,7 +219,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = LazyNode(String(xml), 1, Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = LazyNode(String(xml), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(read(filename, String), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(read(io, String), LazyNode)

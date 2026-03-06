@@ -18,9 +18,9 @@ function XML.mmap(filename::AbstractString, ::Type{XML.LazyNode})
         Mmap.mmap(io)
     end
     sv = StringView(bytes)
-    XML.LazyNode(sv, 1, XML.Document)
+    XML.LazyNode(sv, XML.Document)
 end
 
-Base.parse(xml::StringView, ::Type{XML.LazyNode}) = XML.LazyNode(xml, 1, XML.Document)
+Base.parse(xml::StringView, ::Type{XML.LazyNode}) = XML.LazyNode(xml, XML.Document)
 
 end # module

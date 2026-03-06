@@ -176,60 +176,104 @@ For large files or when you need fine-grained control, `XML.XMLTokenizer` provid
 using XML.XMLTokenizer
 
 for token in tokenize("<root><child attr=\"val\">text</child></root>")
-    println(token.kind, " => ", repr(token.raw))
+    println(token.kind, " => ", repr(String(token.raw)))
 end
-# TOKEN_OPEN_TAG_START => "<root"
-# TOKEN_CLOSE_TAG => ">"
-# TOKEN_OPEN_TAG_START => "<child"
+# TOKEN_OPEN_TAG => "<root"
+# TOKEN_TAG_CLOSE => ">"
+# TOKEN_OPEN_TAG => "<child"
 # TOKEN_ATTR_NAME => "attr"
 # TOKEN_ATTR_VALUE => "\"val\""
-# TOKEN_CLOSE_TAG => ">"
+# TOKEN_TAG_CLOSE => ">"
 # TOKEN_TEXT => "text"
-# TOKEN_END_TAG => "</child>"
-# TOKEN_END_TAG => "</root>"
+# TOKEN_CLOSE_TAG => "</child"
+# TOKEN_TAG_CLOSE => ">"
+# TOKEN_CLOSE_TAG => "</root"
+# TOKEN_TAG_CLOSE => ">"
 ```
 
 <br>
 
-# Escaping
+# `LazyNode`
 
-XML.jl doesn't automatically escape special characters (`<`, `>`, `&`, `"`, `'`) for you. Use the provided utility functions:
+For read-only access without building a full DOM tree, use `LazyNode`. It stores only a reference to the source string and re-tokenizes on demand, using significantly less memory:
 
-- `XML.escape(::String)` / `XML.unescape(::String)` -- transform strings.
-- `XML.escape!(::Node)` / `XML.unescape!(::Node)` -- transform an entire node tree in-place.
+```julia
+doc = parse(xml_string, LazyNode)
+doc = read("file.xml", LazyNode)
+```
+
+`LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
+
+### Memory-mapped files
+
+For very large files, combine `LazyNode` with memory mapping via the `StringViews` extension:
+
+```julia
+using XML, StringViews
+
+doc = XML.mmap("very_large.xml", LazyNode)
+```
 
 <br>
 
 # Benchmarks
 
-Details in the benchmark file: [benchmarks.jl](benchmarks/benchmarks.jl)
+Benchmark source: [benchmarks.jl](benchmarks/benchmarks.jl).  Test data: `books.xml` (small, ~4 KB) and a generated XMark auction XML (medium, ~14 MB).
+
 
 
 ```
-============================================================
-  BENCHMARK RESULTS
-============================================================
+                         Parse (small) — median time (ms)
 
-                      Parse (small) — median time (ms)
+        XML.jl  ■■■■■■■ 0.041
+   XML.jl (SS)  ■■■■■■ 0.034
+         EzXML  ■■■■■ 0.030
+      LightXML  ■■■■■■ 0.033
+       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.232
 
-     XML.jl  ■■■■■■ 0.031916
-      EzXML  ■■■■ 0.025125
-   LightXML  ■■■■■ 0.029959
-    XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.23125
+
+                         Parse (medium) — median time (ms)
+
+        XML.jl  ■■■■■■■■■■■■ 194.2
+   XML.jl (SS)  ■■■■■■■■■■ 172.8
+         EzXML  ■■■■■■ 105.8
+      LightXML  ■■■■■■ 105.0
+       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 687.7
 
 
                       Write (small) — median time (ms)
 
-     XML.jl  ■■■■■■■■■■■■ 0.027667
-      EzXML  ■■■■ 0.010375
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.093584
+     XML.jl  ■■■■■■■■ 0.021
+      EzXML  ■■■■ 0.012
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.110
 
 
-                       Collect tags — median time (ms)
+                      Write (medium) — median time (ms)
 
-     XML.jl  ■■■■■■ 0.000579122
-      EzXML  ■■■■■■■■■■■■■■■■■■■■■■ 0.0021084
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.00360413
+     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 93.2
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 84.6
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■ 60.4
+
+
+                        Read file — median time (ms)
+
+     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 214.1
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■ 143.1
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■ 121.9
+
+
+                   Collect tags (small) — median time (ms)
+
+     XML.jl  ■■■■■■ 0.000698
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■ 0.00255
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.00430
+
+
+                  Collect tags (medium) — median time (ms)
+
+     XML.jl  ■■■■■■■■■■■■■■■■■■■ 12.6
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 20.5
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 27.6
 ```
 
 ```julia

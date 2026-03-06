@@ -37,14 +37,18 @@ macro add_benchmark(kind, name, expr...)
     end))
 end
 
+const SSNode = Node{SubString{String}}
+
 #-----------------------------------------------------------------------------# Parse (small)
 @add_benchmark "Parse (small)" "XML.jl" parse($small_xml, Node)
+@add_benchmark "Parse (small)" "XML.jl (SS)" parse($small_xml, SSNode)
 @add_benchmark "Parse (small)" "EzXML" EzXML.parsexml($small_xml)
 @add_benchmark "Parse (small)" "LightXML" LightXML.parse_string($small_xml)
 @add_benchmark "Parse (small)" "XMLDict" XMLDict.xml_dict($small_xml)
 
 #-----------------------------------------------------------------------------# Parse (medium)
 @add_benchmark "Parse (medium)" "XML.jl" parse($medium_xml, Node)
+@add_benchmark "Parse (medium)" "XML.jl (SS)" parse($medium_xml, SSNode)
 @add_benchmark "Parse (medium)" "EzXML" EzXML.parsexml($medium_xml)
 @add_benchmark "Parse (medium)" "LightXML" LightXML.parse_string($medium_xml)
 @add_benchmark "Parse (medium)" "XMLDict" XMLDict.xml_dict($medium_xml)
