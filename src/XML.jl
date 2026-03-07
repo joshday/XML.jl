@@ -27,46 +27,26 @@ Escape the five XML predefined entities: `&` `<` `>` `'` `"`.
 """
 escape(x::AbstractString) = replace(x, escape_chars...)
 
+# Replace a numeric character reference with its Unicode character.
+# Numeric character references encode characters by code point: decimal (&#233; → é) or hex (&#xE9; → é).
+function _unescape_charref(ref::AbstractString)
+    is_hex = length(ref) > 3 && ref[3] in ('x', 'X')
+    digits = SubString(ref, is_hex ? 4 : 3, length(ref) - 1)
+    cp = tryparse(UInt32, digits; base = is_hex ? 16 : 10)
+    !isnothing(cp) && isvalid(Char, cp) ? string(Char(cp)) : ref
+end
+
+"""
+    unescape(x::AbstractString) -> String
+
+Unescape XML entities in `x`: the five predefined entities (`&amp;` `&lt;` `&gt;` `&apos;`
+`&quot;`) and numeric character references (`&#123;`, `&#xAB;`).  Each reference is processed
+exactly once (no double-unescaping).
+"""
 function unescape(x::AbstractString)
     occursin('&', x) || return string(x)
-    s = string(x)
-    io = IOBuffer(sizehint=ncodeunits(s))
-    i = 1
-    while i <= ncodeunits(s)
-        if s[i] == '&'
-            j = findnext(';', s, i + 1)
-            if !isnothing(j)
-                ref = SubString(s, i, j)
-                if ref == "&amp;"
-                    print(io, '&')
-                elseif ref == "&lt;"
-                    print(io, '<')
-                elseif ref == "&gt;"
-                    print(io, '>')
-                elseif ref == "&apos;"
-                    print(io, '\'')
-                elseif ref == "&quot;"
-                    print(io, '"')
-                elseif startswith(ref, "&#")
-                    is_hex = length(ref) > 3 && (ref[3] == 'x' || ref[3] == 'X')
-                    digits = SubString(s, i + (is_hex ? 3 : 2), j - 1)
-                    cp = tryparse(UInt32, digits; base = is_hex ? 16 : 10)
-                    if !isnothing(cp) && isvalid(Char, cp)
-                        print(io, Char(cp))
-                    else
-                        print(io, ref)
-                    end
-                else
-                    print(io, ref)
-                end
-                i = j + 1
-                continue
-            end
-        end
-        print(io, s[i])
-        i = nextind(s, i)
-    end
-    String(take!(io))
+    s = replace(string(x), r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref)
+    replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
 end
 
 #-----------------------------------------------------------------------------# NodeType

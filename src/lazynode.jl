@@ -17,8 +17,9 @@ struct LazyNode{S <: AbstractString}
     nodetype::NodeType
 end
 
-LazyNode(data::S, ::Type{Document}) where {S <: AbstractString} =
-    LazyNode{S}(data, Token(TOKEN_TEXT, SubString(data, 1, 0)), Document)
+function LazyNode(data::S, nt::NodeType) where {S <: AbstractString}
+    LazyNode{S}(data, Token(TOKEN_TEXT, SubString(data, 1, 0)), nt)
+end
 
 nodetype(n::LazyNode) = n.nodetype
 
