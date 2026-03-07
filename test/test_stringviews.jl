@@ -80,5 +80,6 @@ using Test, XML, StringViews
         rm(tmpfile2, force=true)
     end
 
+    GC.gc()  # release mmap before deleting on Windows
     rm(tmpfile, force=true)
 end
