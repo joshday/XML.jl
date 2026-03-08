@@ -2729,4 +2729,3 @@ end
 include("test_pugixml.jl")
 include("test_libexpat.jl")
 include("test_w3c.jl")
-include("test_stringviews.jl")

@@ -206,12 +206,15 @@ doc = read("file.xml", LazyNode)
 
 ### Memory-mapped files
 
-For very large files, combine `LazyNode` with memory mapping via the `StringViews` extension:
+For very large files, combine `LazyNode` with memory mapping to avoid reading the entire file into heap memory:
 
 ```julia
-using XML, StringViews
+using XML, Mmap, StringViews
 
-doc = XML.mmap("very_large.xml", LazyNode)
+doc = open("very_large.xml") do io
+    sv = StringView(Mmap.mmap(io))
+    parse(sv, LazyNode)
+end
 ```
 
 <br>

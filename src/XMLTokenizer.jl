@@ -15,15 +15,6 @@ end
 """
 module XMLTokenizer
 
-export tokenize, tag_name, attr_value, pi_target, TokenKind, Token,
-    TOKEN_TEXT,
-    TOKEN_OPEN_TAG, TOKEN_CLOSE_TAG, TOKEN_TAG_CLOSE, TOKEN_SELF_CLOSE,
-    TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
-    TOKEN_CDATA_OPEN, TOKEN_CDATA_CONTENT, TOKEN_CDATA_CLOSE,
-    TOKEN_COMMENT_OPEN, TOKEN_COMMENT_CONTENT, TOKEN_COMMENT_CLOSE,
-    TOKEN_PI_OPEN, TOKEN_PI_CONTENT, TOKEN_PI_CLOSE,
-    TOKEN_XML_DECL_OPEN, TOKEN_XML_DECL_CLOSE,
-    TOKEN_DOCTYPE_OPEN, TOKEN_DOCTYPE_CONTENT, TOKEN_DOCTYPE_CLOSE
 
 #-----------------------------------------------------------------------# TokenKind
 @enum TokenKind::UInt8 begin
@@ -74,24 +65,24 @@ function Base.show(io::IO, t::Token)
     print(io, t.kind, ": ", repr(String(t.raw)))
 end
 
-#-----------------------------------------------------------------------# Tokenizer state
-@enum _State::UInt8 begin
-    _S_DEFAULT            # normal content mode
-    _S_TAG                # inside open tag, reading attributes
-    _S_TAG_VALUE          # expecting quoted attribute value
-    _S_CLOSE_TAG          # inside close tag, expecting >
-    _S_XML_DECL           # inside <?xml, reading pseudo-attributes
-    _S_XML_DECL_VALUE     # expecting quoted attr value in xml decl
-    _S_COMMENT            # after <!--, reading content
-    _S_CDATA              # after <![CDATA[, reading content
-    _S_PI                 # after <?target, reading content
-    _S_DOCTYPE            # after <!DOCTYPE, reading content
+#-----------------------------------------------------------------------# Tokenizer mode
+@enum _Mode::UInt8 begin
+    _M_DEFAULT            # normal content mode
+    _M_TAG                # inside open tag, reading attributes
+    _M_TAG_VALUE          # expecting quoted attribute value
+    _M_CLOSE_TAG          # inside close tag, expecting >
+    _M_XML_DECL           # inside <?xml, reading pseudo-attributes
+    _M_XML_DECL_VALUE     # expecting quoted attr value in xml decl
+    _M_COMMENT            # after <!--, reading content
+    _M_CDATA              # after <![CDATA[, reading content
+    _M_PI                 # after <?target, reading content
+    _M_DOCTYPE            # after <!DOCTYPE, reading content
 end
 
 #-----------------------------------------------------------------------# TokenizerState (immutable, SROA-friendly)
 struct TokenizerState{S <: AbstractString}
     pos::Int
-    state::_State
+    mode::_Mode
     pending::Token{S}
 end
 
@@ -99,7 +90,7 @@ end
 @inline _has_pending(st::TokenizerState) = !isempty(st.pending.raw)
 
 @inline function _init_state(data::AbstractString, pos::Int=1)
-    TokenizerState(pos, _S_DEFAULT, _no_token(data))
+    TokenizerState(pos, _M_DEFAULT, _no_token(data))
 end
 
 #-----------------------------------------------------------------------# Tokenizer (immutable iterator)
@@ -120,7 +111,7 @@ function Base.show(io::IO, t::Tokenizer)
     n = ncodeunits(t.data)
     print(io, "Tokenizer(")
     t.start > 1 && print(io, t.start, "/")
-    print(io, n, " bytes)")
+    print(io, Base.format_bytes(n), ")")
 end
 
 Base.IteratorSize(::Type{<:Tokenizer}) = Base.SizeUnknown()
@@ -168,27 +159,27 @@ end
 #-----------------------------------------------------------------------# Main dispatch
 function _next_token(data, st::TokenizerState)
     if _has_pending(st)
-        return (st.pending, TokenizerState(st.pos, st.state, _no_token(data)))
+        return (st.pending, TokenizerState(st.pos, st.mode, _no_token(data)))
     end
     pos = st.pos
     _iseof(data, pos) && return nothing
 
-    s = st.state
-    if s == _S_DEFAULT
+    s = st.mode
+    if s == _M_DEFAULT
         _peek(data, pos) == UInt8('<') ? _read_markup(data, pos) : _read_text(data, pos)
-    elseif s == _S_TAG || s == _S_XML_DECL
+    elseif s == _M_TAG || s == _M_XML_DECL
         _read_in_tag(data, pos, s)
-    elseif s == _S_TAG_VALUE || s == _S_XML_DECL_VALUE
+    elseif s == _M_TAG_VALUE || s == _M_XML_DECL_VALUE
         _read_attr_value(data, pos, s)
-    elseif s == _S_CLOSE_TAG
+    elseif s == _M_CLOSE_TAG
         _read_close_tag_end(data, pos)
-    elseif s == _S_COMMENT
+    elseif s == _M_COMMENT
         _read_comment_body(data, pos)
-    elseif s == _S_CDATA
+    elseif s == _M_CDATA
         _read_cdata_body(data, pos)
-    elseif s == _S_PI
+    elseif s == _M_PI
         _read_pi_body(data, pos)
-    else  # _S_DOCTYPE
+    else  # _M_DOCTYPE
         _read_doctype_body(data, pos)
     end
 end
@@ -200,7 +191,7 @@ function _read_text(data, pos)
         pos += 1
     end
     tok = Token(TOKEN_TEXT, @inbounds SubString(data, start, prevind(data, pos)))
-    (tok, TokenizerState(pos, _S_DEFAULT, _no_token(data)))
+    (tok, TokenizerState(pos, _M_DEFAULT, _no_token(data)))
 end
 
 function _read_markup(data, pos)
@@ -228,7 +219,7 @@ function _read_bang(data, pos, start)
         (!_iseof(data, pos) && _peek(data, pos) == UInt8('-')) || _err("expected '<!--'", start)
         pos += 1
         tok = Token(TOKEN_COMMENT_OPEN, @inbounds SubString(data, start, pos - 1))
-        return (tok, TokenizerState(pos, _S_COMMENT, _no_token(data)))
+        return (tok, TokenizerState(pos, _M_COMMENT, _no_token(data)))
     end
 
     # CDATA: <![CDATA[
@@ -240,7 +231,7 @@ function _read_bang(data, pos, start)
             pos += 1
         end
         tok = Token(TOKEN_CDATA_OPEN, @inbounds SubString(data, start, pos - 1))
-        return (tok, TokenizerState(pos, _S_CDATA, _no_token(data)))
+        return (tok, TokenizerState(pos, _M_CDATA, _no_token(data)))
     end
 
     # <!DOCTYPE ...> or other <! declaration
@@ -248,7 +239,7 @@ function _read_bang(data, pos, start)
         pos += 1
     end
     tok = Token(TOKEN_DOCTYPE_OPEN, @inbounds SubString(data, start, pos - 1))
-    (tok, TokenizerState(pos, _S_DOCTYPE, _no_token(data)))
+    (tok, TokenizerState(pos, _M_DOCTYPE, _no_token(data)))
 end
 
 #-----------------------------------------------------------------------# <? (PI / XML declaration)
@@ -265,10 +256,10 @@ function _read_pi_start(data, pos, start)
 
     if is_xml
         tok = Token(TOKEN_XML_DECL_OPEN, @inbounds SubString(data, start, pos - 1))
-        (tok, TokenizerState(pos, _S_XML_DECL, _no_token(data)))
+        (tok, TokenizerState(pos, _M_XML_DECL, _no_token(data)))
     else
         tok = Token(TOKEN_PI_OPEN, @inbounds SubString(data, start, pos - 1))
-        (tok, TokenizerState(pos, _S_PI, _no_token(data)))
+        (tok, TokenizerState(pos, _M_PI, _no_token(data)))
     end
 end
 
@@ -278,7 +269,7 @@ function _read_open_tag_start(data, pos, start)
         pos += 1
     end
     tok = Token(TOKEN_OPEN_TAG, @inbounds SubString(data, start, pos - 1))
-    (tok, TokenizerState(pos, _S_TAG, _no_token(data)))
+    (tok, TokenizerState(pos, _M_TAG, _no_token(data)))
 end
 
 function _read_close_tag_start(data, pos, start)
@@ -286,7 +277,7 @@ function _read_close_tag_start(data, pos, start)
         pos += 1
     end
     tok = Token(TOKEN_CLOSE_TAG, @inbounds SubString(data, start, pos - 1))
-    (tok, TokenizerState(pos, _S_CLOSE_TAG, _no_token(data)))
+    (tok, TokenizerState(pos, _M_CLOSE_TAG, _no_token(data)))
 end
 
 function _read_close_tag_end(data, pos)
@@ -294,31 +285,31 @@ function _read_close_tag_end(data, pos)
     _iseof(data, pos) && _err("unterminated close tag", pos)
     _peek(data, pos) == UInt8('>') || _err("expected '>'", pos)
     tok = Token(TOKEN_TAG_CLOSE, @inbounds SubString(data, pos, pos))
-    (tok, TokenizerState(pos + 1, _S_DEFAULT, _no_token(data)))
+    (tok, TokenizerState(pos + 1, _M_DEFAULT, _no_token(data)))
 end
 
 #-----------------------------------------------------------------------# Attributes (shared by S_TAG and S_XML_DECL)
-function _read_in_tag(data, pos, state)
+function _read_in_tag(data, pos, mode)
     pos = _skip_whitespace(data, pos)
     _iseof(data, pos) && _err("unterminated tag", pos)
 
     b = _peek(data, pos)
-    is_decl = (state == _S_XML_DECL)
+    is_decl = (mode == _M_XML_DECL)
 
     # Check for end delimiters
     if is_decl
         if b == UInt8('?') && _canpeek(data, pos, 1) && _peek(data, pos + 1) == UInt8('>')
             tok = Token(TOKEN_XML_DECL_CLOSE, @inbounds SubString(data, pos, pos + 1))
-            return (tok, TokenizerState(pos + 2, _S_DEFAULT, _no_token(data)))
+            return (tok, TokenizerState(pos + 2, _M_DEFAULT, _no_token(data)))
         end
     else
         if b == UInt8('>')
             tok = Token(TOKEN_TAG_CLOSE, @inbounds SubString(data, pos, pos))
-            return (tok, TokenizerState(pos + 1, _S_DEFAULT, _no_token(data)))
+            return (tok, TokenizerState(pos + 1, _M_DEFAULT, _no_token(data)))
         end
         if b == UInt8('/') && _canpeek(data, pos, 1) && _peek(data, pos + 1) == UInt8('>')
             tok = Token(TOKEN_SELF_CLOSE, @inbounds SubString(data, pos, pos + 1))
-            return (tok, TokenizerState(pos + 2, _S_DEFAULT, _no_token(data)))
+            return (tok, TokenizerState(pos + 2, _M_DEFAULT, _no_token(data)))
         end
     end
 
@@ -336,12 +327,12 @@ function _read_in_tag(data, pos, state)
     pos += 1
     pos = _skip_whitespace(data, pos)
 
-    next_state = is_decl ? _S_XML_DECL_VALUE : _S_TAG_VALUE
+    next_state = is_decl ? _M_XML_DECL_VALUE : _M_TAG_VALUE
     tok = Token(TOKEN_ATTR_NAME, @inbounds SubString(data, name_start, name_end))
     (tok, TokenizerState(pos, next_state, _no_token(data)))
 end
 
-function _read_attr_value(data, pos, state)
+function _read_attr_value(data, pos, mode)
     _iseof(data, pos) && _err("expected attribute value", pos)
 
     q = _peek(data, pos)
@@ -355,7 +346,7 @@ function _read_attr_value(data, pos, state)
     _iseof(data, pos) && _err("unterminated attribute value", start)
     pos += 1  # skip closing quote
 
-    next_state = (state == _S_XML_DECL_VALUE) ? _S_XML_DECL : _S_TAG
+    next_state = (mode == _M_XML_DECL_VALUE) ? _M_XML_DECL : _M_TAG
     tok = Token(TOKEN_ATTR_VALUE, @inbounds SubString(data, start, pos - 1))
     (tok, TokenizerState(pos, next_state, _no_token(data)))
 end
@@ -372,7 +363,7 @@ function _read_comment_body(data, pos)
             pos += 3
             pending = Token(TOKEN_COMMENT_CLOSE, @inbounds SubString(data, close_start, pos - 1))
             tok = Token(TOKEN_COMMENT_CONTENT, @inbounds SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, _S_DEFAULT, pending))
+            return (tok, TokenizerState(pos, _M_DEFAULT, pending))
         end
         pos += 1
     end
@@ -390,7 +381,7 @@ function _read_cdata_body(data, pos)
             pos += 3
             pending = Token(TOKEN_CDATA_CLOSE, @inbounds SubString(data, close_start, pos - 1))
             tok = Token(TOKEN_CDATA_CONTENT, @inbounds SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, _S_DEFAULT, pending))
+            return (tok, TokenizerState(pos, _M_DEFAULT, pending))
         end
         pos += 1
     end
@@ -406,7 +397,7 @@ function _read_pi_body(data, pos)
             pos += 2
             pending = Token(TOKEN_PI_CLOSE, @inbounds SubString(data, close_start, pos - 1))
             tok = Token(TOKEN_PI_CONTENT, @inbounds SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, _S_DEFAULT, pending))
+            return (tok, TokenizerState(pos, _M_DEFAULT, pending))
         end
         pos += 1
     end
@@ -446,7 +437,7 @@ function _read_doctype_body(data, pos)
             pos += 1
             pending = Token(TOKEN_DOCTYPE_CLOSE, @inbounds SubString(data, close_start, pos - 1))
             tok = Token(TOKEN_DOCTYPE_CONTENT, @inbounds SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, _S_DEFAULT, pending))
+            return (tok, TokenizerState(pos, _M_DEFAULT, pending))
         else
             pos += 1
         end

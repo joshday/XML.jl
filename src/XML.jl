@@ -10,7 +10,15 @@ export
     h
 
 include("XMLTokenizer.jl")
-using .XMLTokenizer
+using .XMLTokenizer:
+    tokenize, tag_name, attr_value, pi_target, TokenKind, Token, Tokenizer, TokenizerState,
+    TOKEN_TEXT, TOKEN_OPEN_TAG, TOKEN_CLOSE_TAG, TOKEN_TAG_CLOSE, TOKEN_SELF_CLOSE,
+    TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
+    TOKEN_CDATA_OPEN, TOKEN_CDATA_CONTENT, TOKEN_CDATA_CLOSE,
+    TOKEN_COMMENT_OPEN, TOKEN_COMMENT_CONTENT, TOKEN_COMMENT_CLOSE,
+    TOKEN_PI_OPEN, TOKEN_PI_CONTENT, TOKEN_PI_CLOSE,
+    TOKEN_XML_DECL_OPEN, TOKEN_XML_DECL_CLOSE,
+    TOKEN_DOCTYPE_OPEN, TOKEN_DOCTYPE_CONTENT, TOKEN_DOCTYPE_CLOSE
 
 #-----------------------------------------------------------------------------# escape/unescape
 const escape_chars = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '\'' => "&apos;", '"' => "&quot;")
@@ -197,13 +205,6 @@ end
 include("xpath.jl")
 include("lazynode.jl")
 
-"""
-    XML.mmap(filename, LazyNode) -> LazyNode
-
-Memory-map `filename` and return a `LazyNode` backed by a `StringView`.
-Requires `using StringViews` to activate.
-"""
-function mmap end
 
 #-----------------------------------------------------------------------------# _to_node
 _to_node(n::Node{String}) = n
