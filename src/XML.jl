@@ -332,46 +332,40 @@ end
 #-----------------------------------------------------------------------------# show (REPL)
 function Base.show(io::IO, o::Node)
     nt = o.nodetype
-    printstyled(io, nt; color=:light_green)
+    print(io, nt)
     if nt === Text
-        printstyled(io, ' ', repr(o.value))
+        print(io, ' ', repr(o.value))
     elseif nt === Element
-        printstyled(io, " <", o.tag; color=:light_cyan)
+        print(io, " <", o.tag)
         if !isnothing(o.attributes)
             for (k, v) in o.attributes
                 print(io, ' ', k, '=', '"', v, '"')
             end
         end
-        printstyled(io, '>'; color=:light_cyan)
+        print(io, '>')
         n = length(children(o))
-        n > 0 && printstyled(io, n == 1 ? " (1 child)" : " ($n children)"; color=:light_black)
+        n > 0 && print(io, n == 1 ? " (1 child)" : " ($n children)")
     elseif nt === DTD
-        printstyled(io, " <!DOCTYPE "; color=:light_cyan)
-        printstyled(io, o.value; color=:light_black)
-        printstyled(io, '>'; color=:light_cyan)
+        print(io, " <!DOCTYPE ", o.value, '>')
     elseif nt === Declaration
-        printstyled(io, " <?xml"; color=:light_cyan)
+        print(io, " <?xml")
         if !isnothing(o.attributes)
             for (k, v) in o.attributes
                 print(io, ' ', k, '=', '"', v, '"')
             end
         end
-        printstyled(io, "?>"; color=:light_cyan)
+        print(io, "?>")
     elseif nt === ProcessingInstruction
-        printstyled(io, " <?", o.tag; color=:light_cyan)
+        print(io, " <?", o.tag)
         !isnothing(o.value) && print(io, ' ', o.value)
-        printstyled(io, "?>"; color=:light_cyan)
+        print(io, "?>")
     elseif nt === Comment
-        printstyled(io, " <!--"; color=:light_cyan)
-        printstyled(io, o.value; color=:light_black)
-        printstyled(io, "-->"; color=:light_cyan)
+        print(io, " <!--", o.value, "-->")
     elseif nt === CData
-        printstyled(io, " <![CDATA["; color=:light_cyan)
-        printstyled(io, o.value; color=:light_black)
-        printstyled(io, "]]>"; color=:light_cyan)
+        print(io, " <![CDATA[", o.value, "]]>")
     elseif nt === Document
         n = length(children(o))
-        n > 0 && printstyled(io, n == 1 ? " (1 child)" : " ($n children)"; color=:light_black)
+        n > 0 && print(io, n == 1 ? " (1 child)" : " ($n children)")
     end
 end
 
