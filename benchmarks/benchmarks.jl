@@ -5,7 +5,7 @@ using XMLDict: XMLDict
 using LightXML: LightXML
 using BenchmarkTools
 using DataFrames
-using UnicodePlots
+using InteractiveUtils
 
 include("XMarkGenerator.jl")
 using .XMarkGenerator
@@ -115,21 +115,47 @@ end
 @add_benchmark "Collect tags (medium)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(medium_xml))
 @add_benchmark "Collect tags (medium)" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(medium_xml)) teardown=(LightXML.free(o))
 
-#-----------------------------------------------------------------------------# Results
-function plot_group(df, kind)
-    g = groupby(df, :kind)
-    haskey(g, (;kind)) || return
-    sub = g[(;kind)]
-    x = map(row -> "$(row.name)", eachrow(sub))
-    y = map(x -> median(x).time / 1e6, sub.bench)
-    display(barplot(x, y, title = "$kind — median time (ms)", border=:none, width=50))
-    println()
+#-----------------------------------------------------------------------------# Write benchmarks_results.md
+_fmt_ms(t) = string(round(t, sigdigits=3), " ms")
+
+function _compare_indicator(xml_ms, other_ms)
+    ratio = xml_ms / other_ms
+    pct = abs(round((ratio - 1) * 100, digits=1))
+    ratio > 1.05 ? "(XML.jl $(pct)% slower)" : ratio < 0.95 ? "(XML.jl $(pct)% faster)" : "(~same)"
 end
 
-println("\n", "="^60)
-println("  BENCHMARK RESULTS")
-println("="^60, "\n")
+outfile = joinpath(@__DIR__, "benchmarks_results.md")
+open(outfile, "w") do io
+    println(io, "# XML.jl Benchmarks\n")
+    println(io, "```")
+    for kind in unique(df.kind)
+        g = groupby(df, :kind)
+        haskey(g, (;kind)) || continue
+        sub = g[(;kind)]
+        println(io, kind)
+        # Find XML.jl baseline (first row starting with "XML.jl")
+        xml_row = findfirst(r -> startswith(r.name, "XML.jl") && !contains(r.name, "(SS)"), eachrow(sub))
+        xml_ms = isnothing(xml_row) ? nothing : median(sub[xml_row, :bench]).time / 1e6
+        for row in eachrow(sub)
+            ms = median(row.bench).time / 1e6
+            indicator = ""
+            if !isnothing(xml_ms) && !startswith(row.name, "XML.jl")
+                indicator = "  " * _compare_indicator(xml_ms, ms)
+            end
+            println(io, "\t", rpad(row.name, 16), lpad(_fmt_ms(ms), 12), indicator)
+        end
+        println(io)
+    end
+    println(io, "```")
 
-for kind in unique(df.kind)
-    plot_group(df, kind)
+    println(io, "\n```julia")
+    println(io, "versioninfo()")
+    buf = IOBuffer()
+    InteractiveUtils.versioninfo(buf)
+    for line in eachline(IOBuffer(take!(buf)))
+        println(io, "# ", line)
+    end
+    println(io, "```")
 end
+
+println("Results written to $outfile")

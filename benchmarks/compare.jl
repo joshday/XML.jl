@@ -12,7 +12,7 @@ This script:
 4. Prints a side-by-side comparison
 =#
 
-using BenchmarkTools, Serialization
+using BenchmarkTools, Serialization, InteractiveUtils
 
 BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
 BenchmarkTools.DEFAULT_PARAMETERS.samples = 10000
@@ -71,18 +71,25 @@ using XML
 
 dev_results = Dict{String, BenchmarkTools.Trial}()
 
-dev_small = parse(SMALL_XML, Node)
-dev_medium = parse(MEDIUM_XML, Node)
+const SSNode = Node{SubString{String}}
 
-dev_results["Parse (small)"] = @benchmark parse($SMALL_XML, Node)
-dev_results["Parse (small, SS)"] = @benchmark parse($SMALL_XML, Node{SubString{String}})
-dev_results["Parse (medium)"] = @benchmark parse($MEDIUM_XML, Node)
-dev_results["Parse (medium, SS)"] = @benchmark parse($MEDIUM_XML, Node{SubString{String}})
+dev_small = parse(SMALL_XML, Node)
+dev_small_ss = parse(SMALL_XML, SSNode)
+dev_medium = parse(MEDIUM_XML, Node)
+dev_medium_ss = parse(MEDIUM_XML, SSNode)
+
+dev_results["Parse (small), String"] = @benchmark parse($SMALL_XML, Node)
+dev_results["Parse (small), SubString"] = @benchmark parse($SMALL_XML, SSNode)
+dev_results["Parse (medium), String"] = @benchmark parse($MEDIUM_XML, Node)
+dev_results["Parse (medium), SubString"] = @benchmark parse($MEDIUM_XML, SSNode)
 dev_results["Write (small)"] = @benchmark XML.write($dev_small)
 dev_results["Write (medium)"] = @benchmark XML.write($dev_medium)
-dev_results["Read file (medium)"] = @benchmark read($MEDIUM_FILE, Node)
-dev_results["Collect tags (small)"] = @benchmark bench_collect_tags($dev_small)
-dev_results["Collect tags (medium)"] = @benchmark bench_collect_tags($dev_medium)
+dev_results["Read file (medium), String"] = @benchmark read($MEDIUM_FILE, Node)
+dev_results["Read file (medium), SubString"] = @benchmark parse(read($MEDIUM_FILE, String), SSNode)
+dev_results["Collect tags (small), String"] = @benchmark bench_collect_tags($dev_small)
+dev_results["Collect tags (small), SubString"] = @benchmark bench_collect_tags($dev_small_ss)
+dev_results["Collect tags (medium), String"] = @benchmark bench_collect_tags($dev_medium)
+dev_results["Collect tags (medium), SubString"] = @benchmark bench_collect_tags($dev_medium_ss)
 
 println(" done")
 
@@ -158,52 +165,60 @@ println(" done")
 # Cleanup worktree
 run(pipeline(`git -C $ROOT worktree remove --force $worktree_dir`, stdout=devnull, stderr=devnull))
 
-#-----------------------------------------------------------------------------# Compare
-println()
-println("-"^60)
+#-----------------------------------------------------------------------------# Write compare_results.md
+_fmt_ms(t) = string(round(t, sigdigits=3), " ms")
 
-all_keys = [
-    "Parse (small)", "Parse (small, SS)",
-    "Parse (medium)", "Parse (medium, SS)",
-    "Write (small)", "Write (medium)",
-    "Read file (medium)",
-    "Collect tags (small)", "Collect tags (medium)",
-]
-
-for name in all_keys
-    has_dev = haskey(dev_results, name)
-    has_rel = haskey(release_results, name)
-    has_dev || has_rel || continue
-
-    println()
-    println("  $name")
-
-    if has_dev && has_rel
-        dev_med = median(dev_results[name]).time / 1e6
-        rel_med = median(release_results[name]).time / 1e6
-        change = (dev_med / rel_med - 1) * 100
-
-        pct = abs(round(change, digits=1))
-        indicator = if change < -5
-            "$(pct)% faster"
-        elseif change > 5
-            "$(pct)% slower"
-        else
-            "~same"
-        end
-
-        lpad_tag = lpad(RELEASE_TAG, 12)
-        lpad_dev = lpad("dev", 12)
-        println("    $lpad_tag  $(lpad(string(round(rel_med, digits=4), " ms"), 12))")
-        println("    $lpad_dev  $(lpad(string(round(dev_med, digits=4), " ms"), 12))  ($indicator)")
-    elseif has_dev
-        dev_med = median(dev_results[name]).time / 1e6
-        lpad_tag = lpad(RELEASE_TAG, 12)
-        lpad_dev = lpad("dev", 12)
-        println("    $lpad_tag  $(lpad("n/a", 12))")
-        println("    $lpad_dev  $(lpad(string(round(dev_med, digits=4), " ms"), 12))")
-    end
+function _compare_indicator(dev_ms, rel_ms)
+    change = (dev_ms / rel_ms - 1) * 100
+    pct = abs(round(change, digits=1))
+    change < -5 ? "($(pct)% faster)" : change > 5 ? "($(pct)% slower)" : "(~same)"
 end
 
-println()
-println("="^60)
+groups = [
+    ("Parse (small)",        "Parse (small)",        ["Parse (small), String", "Parse (small), SubString"]),
+    ("Parse (medium)",       "Parse (medium)",       ["Parse (medium), String", "Parse (medium), SubString"]),
+    ("Write (small)",        "Write (small)",        ["Write (small)"]),
+    ("Write (medium)",       "Write (medium)",       ["Write (medium)"]),
+    ("Read file (medium)",   "Read file (medium)",   ["Read file (medium), String", "Read file (medium), SubString"]),
+    ("Collect tags (small)", "Collect tags (small)",  ["Collect tags (small), String", "Collect tags (small), SubString"]),
+    ("Collect tags (medium)","Collect tags (medium)", ["Collect tags (medium), String", "Collect tags (medium), SubString"]),
+]
+
+outfile = joinpath(@__DIR__, "compare_results.md")
+open(outfile, "w") do io
+    println(io, "# XML.jl Benchmark Comparison: dev vs $RELEASE_TAG\n")
+    println(io, "```")
+    for (title, rel_key, dev_keys) in groups
+        rel_ms = haskey(release_results, rel_key) ? median(release_results[rel_key]).time / 1e6 : nothing
+        any(k -> haskey(dev_results, k), dev_keys) || (isnothing(rel_ms) && continue)
+
+        println(io, title)
+        if !isnothing(rel_ms)
+            println(io, "\t", rpad(RELEASE_TAG, 16), lpad(_fmt_ms(rel_ms), 12))
+        end
+        for dk in dev_keys
+            haskey(dev_results, dk) || continue
+            dev_ms = median(dev_results[dk]).time / 1e6
+            label = occursin(", ", dk) ? split(dk, ", "; limit=2)[2] : "dev"
+            ms_str = lpad(_fmt_ms(dev_ms), 12)
+            if isnothing(rel_ms)
+                println(io, "\t", rpad(label, 16), ms_str)
+            else
+                println(io, "\t", rpad(label, 16), ms_str, "  ", _compare_indicator(dev_ms, rel_ms))
+            end
+        end
+        println(io)
+    end
+    println(io, "```")
+
+    println(io, "\n```julia")
+    println(io, "versioninfo()")
+    buf = IOBuffer()
+    InteractiveUtils.versioninfo(buf)
+    for line in eachline(IOBuffer(take!(buf)))
+        println(io, "# ", line)
+    end
+    println(io, "```")
+end
+
+println("Results written to $outfile")

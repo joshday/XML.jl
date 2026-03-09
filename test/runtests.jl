@@ -2487,6 +2487,46 @@ end
 end
 
 #==============================================================================#
+#                        DEPRECATIONS / REMOVED API                            #
+#==============================================================================#
+@testset "Deprecations and Removed API" begin
+    node = Element("test")
+    node2 = Element("other")
+
+    @testset "XML.next errors" begin
+        @test_throws ErrorException XML.next(node)
+    end
+
+    @testset "XML.prev errors" begin
+        @test_throws ErrorException XML.prev(node)
+    end
+
+    @testset "XML.nodes_equal errors" begin
+        @test_throws ErrorException XML.nodes_equal(node, node2)
+    end
+
+    @testset "XML.escape! errors" begin
+        @test_throws ErrorException XML.escape!(node)
+        @test_throws ErrorException XML.escape!(node, false)
+    end
+
+    @testset "XML.unescape! errors" begin
+        @test_throws ErrorException XML.unescape!(node)
+        @test_throws ErrorException XML.unescape!(node, false)
+    end
+
+    @testset "XML.Raw errors" begin
+        @test_throws ErrorException XML.Raw()
+        @test_throws ErrorException XML.Raw("arg")
+    end
+
+    @testset "simplevalue binding redirects to simple_value" begin
+        el = Element("x", "val")
+        @test XML.simplevalue(el) == simple_value(el)
+    end
+end
+
+#==============================================================================#
 #                              XPATH                                           #
 #==============================================================================#
 @testset "XPath" begin
@@ -2723,6 +2763,443 @@ end
         root = xpath(doc, "/root")[1]
         results = xpath(root, "//name")
         @test length(results) == 3
+    end
+end
+
+#==============================================================================#
+#                              LAZYNODE                                        #
+#==============================================================================#
+@testset "LazyNode" begin
+    @testset "parse and nodetype" begin
+        doc = parse("<root/>", LazyNode)
+        @test nodetype(doc) == Document
+
+        doc2 = parse(LazyNode, "<root/>")
+        @test nodetype(doc2) == Document
+    end
+
+    @testset "read from IO" begin
+        xml = """<?xml version="1.0"?><root>hello</root>"""
+        doc = read(IOBuffer(xml), LazyNode)
+        @test nodetype(doc) == Document
+    end
+
+    @testset "read from file" begin
+        path = joinpath(@__DIR__, "data", "books.xml")
+        isfile(path) || return
+        doc = read(path, LazyNode)
+        @test nodetype(doc) == Document
+        @test length(children(doc)) > 0
+    end
+
+    @testset "Document children" begin
+        xml = """<?xml version="1.0"?><root><child/></root>"""
+        doc = parse(xml, LazyNode)
+        ch = children(doc)
+        @test length(ch) == 2
+        @test nodetype(ch[1]) == Declaration
+        @test nodetype(ch[2]) == Element
+    end
+
+    @testset "Document with all prolog node types" begin
+        xml = """<?xml version="1.0"?><!DOCTYPE root SYSTEM "r.dtd"><!-- comment --><?pi data?><root/>"""
+        doc = parse(xml, LazyNode)
+        ch = children(doc)
+        types = map(nodetype, ch)
+        @test Declaration in types
+        @test DTD in types
+        @test Comment in types
+        @test ProcessingInstruction in types
+        @test Element in types
+    end
+
+    @testset "Element tag" begin
+        doc = parse("<root/>", LazyNode)
+        @test tag(doc[1]) == "root"
+    end
+
+    @testset "tag returns nothing for non-element/PI" begin
+        doc = parse("<root>text</root>", LazyNode)
+        text_node = children(doc[1])[1]
+        @test nodetype(text_node) == Text
+        @test tag(text_node) === nothing
+    end
+
+    @testset "Element attributes" begin
+        doc = parse("""<root a="1" b="2"/>""", LazyNode)
+        attrs = attributes(doc[1])
+        @test attrs isa Dict
+        @test attrs["a"] == "1"
+        @test attrs["b"] == "2"
+    end
+
+    @testset "Element with no attributes" begin
+        doc = parse("<root/>", LazyNode)
+        @test attributes(doc[1]) === nothing
+    end
+
+    @testset "attributes returns nothing for non-element" begin
+        doc = parse("<root>text</root>", LazyNode)
+        @test attributes(children(doc[1])[1]) === nothing
+    end
+
+    @testset "attributes unescape entity references" begin
+        doc = parse("""<x a="a&amp;b"/>""", LazyNode)
+        @test doc[1]["a"] == "a&b"
+    end
+
+    @testset "Declaration attributes" begin
+        doc = parse("""<?xml version="1.0" encoding="UTF-8"?><root/>""", LazyNode)
+        decl = doc[1]
+        @test nodetype(decl) == Declaration
+        attrs = attributes(decl)
+        @test attrs["version"] == "1.0"
+        @test attrs["encoding"] == "UTF-8"
+    end
+
+    @testset "get with default" begin
+        doc = parse("""<x a="1"/>""", LazyNode)
+        el = doc[1]
+        @test get(el, "a", "nope") == "1"
+        @test get(el, "b", "nope") == "nope"
+    end
+
+    @testset "get on non-element returns default" begin
+        doc = parse("<root>text</root>", LazyNode)
+        text_node = children(doc[1])[1]
+        @test get(text_node, "a", "default") == "default"
+    end
+
+    @testset "getindex with string key" begin
+        doc = parse("""<x a="1"/>""", LazyNode)
+        @test doc[1]["a"] == "1"
+        @test_throws KeyError doc[1]["nonexistent"]
+    end
+
+    @testset "haskey" begin
+        doc = parse("""<x a="1"/>""", LazyNode)
+        @test haskey(doc[1], "a") == true
+        @test haskey(doc[1], "b") == false
+    end
+
+    @testset "keys" begin
+        doc = parse("""<x a="1" b="2"/>""", LazyNode)
+        @test keys(doc[1]) == ["a", "b"]
+    end
+
+    @testset "keys on element with no attributes" begin
+        doc = parse("<x/>", LazyNode)
+        @test isempty(keys(doc[1]))
+    end
+
+    @testset "keys on non-element" begin
+        doc = parse("<root>text</root>", LazyNode)
+        @test keys(children(doc[1])[1]) == ()
+    end
+
+    @testset "Text value" begin
+        doc = parse("<root>hello</root>", LazyNode)
+        ch = children(doc[1])
+        @test nodetype(ch[1]) == Text
+        @test value(ch[1]) == "hello"
+    end
+
+    @testset "Text value unescapes entities" begin
+        doc = parse("<root>&amp; &lt; &gt;</root>", LazyNode)
+        @test value(children(doc[1])[1]) == "& < >"
+    end
+
+    @testset "Comment value" begin
+        doc = parse("<root><!-- a comment --></root>", LazyNode)
+        c = children(doc[1])[1]
+        @test nodetype(c) == Comment
+        @test value(c) == " a comment "
+    end
+
+    @testset "CData value" begin
+        doc = parse("<root><![CDATA[raw <data>]]></root>", LazyNode)
+        cd = children(doc[1])[1]
+        @test nodetype(cd) == CData
+        @test value(cd) == "raw <data>"
+    end
+
+    @testset "DTD value" begin
+        doc = parse("""<!DOCTYPE greeting SYSTEM "hello.dtd"><greeting/>""", LazyNode)
+        dtd = doc[1]
+        @test nodetype(dtd) == DTD
+        @test contains(value(dtd), "greeting")
+    end
+
+    @testset "ProcessingInstruction tag and value" begin
+        doc = parse("<?mypi some data?><root/>", LazyNode)
+        pi = doc[1]
+        @test nodetype(pi) == ProcessingInstruction
+        @test tag(pi) == "mypi"
+        @test value(pi) == "some data"
+    end
+
+    @testset "ProcessingInstruction with no content" begin
+        doc = parse("<?target?><root/>", LazyNode)
+        pi = doc[1]
+        @test tag(pi) == "target"
+        @test value(pi) === nothing
+    end
+
+    @testset "value returns nothing for Element/Document" begin
+        doc = parse("<root/>", LazyNode)
+        @test value(doc) === nothing
+        @test value(doc[1]) === nothing
+    end
+
+    @testset "Element children" begin
+        doc = parse("<root><a/><b/><c/></root>", LazyNode)
+        root = doc[1]
+        @test length(children(root)) == 3
+        @test tag(children(root)[1]) == "a"
+        @test tag(children(root)[2]) == "b"
+        @test tag(children(root)[3]) == "c"
+    end
+
+    @testset "self-closing element has no children" begin
+        doc = parse("<root><br/></root>", LazyNode)
+        br = children(doc[1])[1]
+        @test isempty(children(br))
+    end
+
+    @testset "non-element children returns empty tuple" begin
+        doc = parse("<root>text</root>", LazyNode)
+        text_node = children(doc[1])[1]
+        @test children(text_node) == ()
+    end
+
+    @testset "nested elements" begin
+        doc = parse("<a><b><c>deep</c></b></a>", LazyNode)
+        @test tag(doc[1]) == "a"
+        @test tag(doc[1][1]) == "b"
+        @test tag(doc[1][1][1]) == "c"
+        @test simple_value(doc[1][1][1]) == "deep"
+    end
+
+    @testset "mixed content children" begin
+        xml = "<root>text<!-- comment --><![CDATA[cdata]]><?pi data?><child/></root>"
+        doc = parse(xml, LazyNode)
+        ch = children(doc[1])
+        types = map(nodetype, ch)
+        @test Text in types
+        @test Comment in types
+        @test CData in types
+        @test ProcessingInstruction in types
+        @test Element in types
+    end
+
+    @testset "integer indexing" begin
+        doc = parse("<root><a/><b/><c/></root>", LazyNode)
+        @test tag(doc[1][1]) == "a"
+        @test tag(doc[1][2]) == "b"
+        @test tag(doc[1][3]) == "c"
+    end
+
+    @testset "colon indexing" begin
+        doc = parse("<root><a/><b/></root>", LazyNode)
+        all = doc[1][:]
+        @test length(all) == 2
+    end
+
+    @testset "lastindex" begin
+        doc = parse("<root><a/><b/><c/></root>", LazyNode)
+        @test tag(doc[1][end]) == "c"
+    end
+
+    @testset "only" begin
+        doc = parse("<root><only/></root>", LazyNode)
+        @test tag(only(doc[1])) == "only"
+    end
+
+    @testset "length" begin
+        doc = parse("<root><a/><b/><c/></root>", LazyNode)
+        @test length(doc[1]) == 3
+    end
+
+    @testset "is_simple" begin
+        doc = parse("<root><simple>text</simple><complex><child/></complex></root>", LazyNode)
+        simple = children(doc[1])[1]
+        complex = children(doc[1])[2]
+        @test is_simple(simple)
+        @test !is_simple(complex)
+    end
+
+    @testset "is_simple with attributes" begin
+        doc = parse("""<root><x a="1">text</x></root>""", LazyNode)
+        @test !is_simple(children(doc[1])[1])
+    end
+
+    @testset "is_simple with CData child" begin
+        doc = parse("<root><x><![CDATA[data]]></x></root>", LazyNode)
+        @test is_simple(children(doc[1])[1])
+    end
+
+    @testset "is_simple returns false for non-element" begin
+        doc = parse("<root>text</root>", LazyNode)
+        @test !is_simple(children(doc[1])[1])
+    end
+
+    @testset "simple_value" begin
+        doc = parse("<root><x>hello</x></root>", LazyNode)
+        @test simple_value(children(doc[1])[1]) == "hello"
+    end
+
+    @testset "simple_value errors on non-simple" begin
+        doc = parse("<root><x><y/></x></root>", LazyNode)
+        @test_throws ErrorException simple_value(children(doc[1])[1])
+    end
+
+    @testset "simple_value errors on non-element" begin
+        doc = parse("<root>text</root>", LazyNode)
+        @test_throws ErrorException simple_value(children(doc[1])[1])
+    end
+
+    @testset "show Document" begin
+        doc = parse("<root><a/></root>", LazyNode)
+        s = sprint(show, doc)
+        @test contains(s, "Lazy")
+        @test contains(s, "Document")
+        @test contains(s, "1 child")
+    end
+
+    @testset "show Document multiple children" begin
+        doc = parse("<!-- c --><root/>", LazyNode)
+        s = sprint(show, doc)
+        @test contains(s, "2 children")
+    end
+
+    @testset "show Element" begin
+        doc = parse("""<root a="1"/>""", LazyNode)
+        s = sprint(show, doc[1])
+        @test contains(s, "Lazy Element")
+        @test contains(s, "<root")
+    end
+
+    @testset "show Text" begin
+        doc = parse("<root>hello</root>", LazyNode)
+        s = sprint(show, children(doc[1])[1])
+        @test contains(s, "Lazy Text")
+        @test contains(s, "hello")
+    end
+
+    @testset "show Comment" begin
+        doc = parse("<root><!-- test --></root>", LazyNode)
+        s = sprint(show, children(doc[1])[1])
+        @test contains(s, "Lazy Comment")
+        @test contains(s, "<!--")
+    end
+
+    @testset "show CData" begin
+        doc = parse("<root><![CDATA[data]]></root>", LazyNode)
+        s = sprint(show, children(doc[1])[1])
+        @test contains(s, "Lazy CData")
+        @test contains(s, "<![CDATA[")
+    end
+
+    @testset "show DTD" begin
+        doc = parse("<!DOCTYPE html><html/>", LazyNode)
+        s = sprint(show, doc[1])
+        @test contains(s, "Lazy DTD")
+        @test contains(s, "<!DOCTYPE")
+    end
+
+    @testset "show Declaration" begin
+        doc = parse("""<?xml version="1.0"?><root/>""", LazyNode)
+        s = sprint(show, doc[1])
+        @test contains(s, "Lazy Declaration")
+        @test contains(s, "<?xml")
+    end
+
+    @testset "show ProcessingInstruction" begin
+        doc = parse("<?target data?><root/>", LazyNode)
+        s = sprint(show, doc[1])
+        @test contains(s, "Lazy ProcessingInstruction")
+        @test contains(s, "<?target")
+    end
+
+    @testset "show ProcessingInstruction without content" begin
+        doc = parse("<?target?><root/>", LazyNode)
+        s = sprint(show, doc[1])
+        @test contains(s, "<?target?>")
+    end
+
+    @testset "LazyNode agrees with Node on books.xml" begin
+        path = joinpath(@__DIR__, "data", "books.xml")
+        isfile(path) || return
+
+        eager = read(path, Node)
+        lazy = read(path, LazyNode)
+
+        # Same top-level structure
+        eager_ch = children(eager)
+        lazy_ch = children(lazy)
+        @test length(eager_ch) == length(lazy_ch)
+        @test map(nodetype, eager_ch) == map(nodetype, lazy_ch)
+
+        # Find root element in both
+        eager_root = first(filter(x -> nodetype(x) == Element, eager_ch))
+        lazy_root = first(filter(x -> nodetype(x) == Element, lazy_ch))
+        @test tag(eager_root) == tag(lazy_root)
+
+        # Same number of book elements
+        eager_books = filter(x -> nodetype(x) == Element, children(eager_root))
+        lazy_books = filter(x -> nodetype(x) == Element, children(lazy_root))
+        @test length(eager_books) == length(lazy_books)
+
+        # First book has same attributes and child values
+        eb1 = eager_books[1]
+        lb1 = lazy_books[1]
+        @test eb1["id"] == lb1["id"]
+
+        eager_author = first(filter(x -> nodetype(x) == Element && tag(x) == "author", children(eb1)))
+        lazy_author = first(filter(x -> nodetype(x) == Element && tag(x) == "author", children(lb1)))
+        @test simple_value(eager_author) == simple_value(lazy_author)
+    end
+
+    @testset "complex document" begin
+        xml = """<?xml version="1.0"?>
+<!DOCTYPE root SYSTEM "root.dtd">
+<!-- comment -->
+<?pi data?>
+<root attr="val">
+    text content
+    <child>inner</child>
+    <![CDATA[cdata content]]>
+    <!-- inner comment -->
+    <?inner-pi inner data?>
+    <empty/>
+</root>"""
+        doc = parse(xml, LazyNode)
+        @test nodetype(doc) == Document
+
+        typed = filter(x -> nodetype(x) != Text, children(doc))
+        @test nodetype(typed[1]) == Declaration
+        @test nodetype(typed[2]) == DTD
+        @test nodetype(typed[3]) == Comment
+        @test nodetype(typed[4]) == ProcessingInstruction
+        @test nodetype(typed[5]) == Element
+
+        root = typed[5]
+        @test tag(root) == "root"
+        @test root["attr"] == "val"
+
+        inner = children(root)
+        inner_types = map(nodetype, inner)
+        @test Text in inner_types
+        @test Element in inner_types
+        @test CData in inner_types
+        @test Comment in inner_types
+        @test ProcessingInstruction in inner_types
+
+        child_els = filter(x -> nodetype(x) == Element, inner)
+        @test length(child_els) == 2
+        @test tag(child_els[1]) == "child"
+        @test simple_value(child_els[1]) == "inner"
+        @test tag(child_els[2]) == "empty"
     end
 end
 
