@@ -78,7 +78,7 @@ function attributes(n::LazyNode)
         result === nothing && break
         push!(attrs, name => unescape(attr_value(result[1])))
     end
-    isempty(attrs) ? nothing : Dict(attrs)
+    isempty(attrs) ? nothing : Attributes(attrs)
 end
 
 function Base.get(n::LazyNode, key::AbstractString, default)

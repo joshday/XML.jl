@@ -1,7 +1,7 @@
 module XML
 
 export
-    Node, LazyNode, NodeType,
+    Node, LazyNode, NodeType, Attributes,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
     nodetype, tag, attributes, value, children,
     is_simple, simple_value,
@@ -53,7 +53,8 @@ exactly once (no double-unescaping).
 """
 function unescape(x::AbstractString)
     occursin('&', x) || return string(x)
-    s = replace(string(x), r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref)
+    s = string(x)
+    occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
     replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
 end
 
@@ -81,6 +82,42 @@ NodeTypes can be used to construct XML.Nodes:
     Text(text)
 """
 @enum NodeType::UInt8 CData Comment Declaration Document DTD Element ProcessingInstruction Text
+
+#-----------------------------------------------------------------------------# Attributes
+"""
+    Attributes{S} <: AbstractDict{S, S}
+
+An ordered dictionary of XML attributes backed by a `Vector{Pair{S, S}}`.
+Returned by [`attributes`](@ref).  Preserves insertion order and supports the
+full `AbstractDict` interface (`get`, `haskey`, `keys`, `values`, iteration, etc.).
+"""
+struct Attributes{S} <: AbstractDict{S, S}
+    entries::Vector{Pair{S, S}}
+end
+
+Base.length(a::Attributes) = length(a.entries)
+Base.iterate(a::Attributes, state...) = iterate(a.entries, state...)
+
+function Base.getindex(a::Attributes, key::AbstractString)
+    for (k, v) in a.entries
+        k == key && return v
+    end
+    throw(KeyError(key))
+end
+
+function Base.get(a::Attributes, key::AbstractString, default)
+    for (k, v) in a.entries
+        k == key && return v
+    end
+    default
+end
+
+function Base.haskey(a::Attributes, key::AbstractString)
+    any(p -> first(p) == key, a.entries)
+end
+
+Base.keys(a::Attributes) = first.(a.entries)
+Base.values(a::Attributes) = last.(a.entries)
 
 #-----------------------------------------------------------------------------# Node
 struct Node{S}
@@ -116,17 +153,17 @@ nodetype(o::Node) = o.nodetype
 tag(o::Node) = o.tag
 
 """
-    attributes(node::Node) -> Union{Nothing, Dict{String, String}}
+    attributes(node::Node) -> Union{Nothing, Attributes{String}}
 
-Return the attributes of an `Element` or `Declaration` node as a `Dict`, or `nothing` if the
-node has no attributes.
+Return the attributes of an `Element` or `Declaration` node as an [`Attributes`](@ref) dict,
+or `nothing` if the node has no attributes.
 
 !!! note "Changed in v0.4"
     In previous versions, `attributes` returned an `OrderedDict` from OrderedCollections.jl.
-    It now returns a standard `Dict`.  Attribute order is preserved internally but not exposed
-    by this function.  Use `node["key"]` for key-based access and `keys(node)` for ordered keys.
+    It now returns an [`Attributes`](@ref), an ordered `AbstractDict` backed by a
+    `Vector{Pair}`.
 """
-attributes(o::Node) = isnothing(o.attributes) ? nothing : Dict(o.attributes)
+attributes(o::Node) = isnothing(o.attributes) ? nothing : Attributes(o.attributes)
 
 value(o::Node) = o.value
 children(o::Node) = something(o.children, ())
@@ -492,9 +529,11 @@ end
 _to(::Type{String}, s::AbstractString) = String(s)
 _to(::Type{SubString{String}}, s::SubString{String}) = s
 
+_nothingify(v::Vector) = isempty(v) ? nothing : v
+
 function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
     tags = S[]
-    attrs_stack = Vector{Union{Nothing, Vector{Pair{S,S}}}}()
+    attrs_stack = Vector{Pair{S,S}}[]
     children_stack = Vector{Vector{Node{S}}}()
     push!(children_stack, Node{S}[])
 
@@ -512,14 +551,14 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
 
         elseif k === TOKEN_OPEN_TAG
             push!(tags, _to(S, tag_name(token)))
-            push!(attrs_stack, nothing)
+            push!(attrs_stack, Pair{S,S}[])
             push!(children_stack, Node{S}[])
 
         elseif k === TOKEN_SELF_CLOSE
             t = pop!(tags)
             a = pop!(attrs_stack)
             pop!(children_stack)
-            push!(last(children_stack), Node{S}(Element, t, a, nothing, nothing))
+            push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, nothing))
 
         elseif k === TOKEN_TAG_CLOSE
             in_close_tag && (in_close_tag = false)
@@ -531,7 +570,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
             t == close_name || error("Mismatched tags: expected </$t>, got </$close_name>.")
             a = pop!(attrs_stack)
             c = pop!(children_stack)
-            push!(last(children_stack), Node{S}(Element, t, a, nothing, isempty(c) ? nothing : c))
+            push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, isempty(c) ? nothing : c))
             in_close_tag = true
 
         elseif k === TOKEN_ATTR_NAME
@@ -544,9 +583,6 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
                 any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")
                 push!(decl_attrs, name => val)
             elseif !isempty(attrs_stack)
-                if isnothing(last(attrs_stack))
-                    attrs_stack[end] = Pair{S,S}[]
-                end
                 any(p -> first(p) == name, last(attrs_stack)) && error("Duplicate attribute: $name")
                 push!(last(attrs_stack), name => val)
             end

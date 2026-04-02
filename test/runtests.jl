@@ -442,7 +442,7 @@ end
     @testset "multiple attributes accessible via attributes()" begin
         doc = parse("""<x first="1" second="2" third="3"/>""", Node)
         attrs = attributes(doc[1])
-        @test attrs isa Dict
+        @test attrs isa Attributes
         @test attrs["first"] == "1"
         @test attrs["second"] == "2"
         @test attrs["third"] == "3"
@@ -2828,7 +2828,7 @@ end
     @testset "Element attributes" begin
         doc = parse("""<root a="1" b="2"/>""", LazyNode)
         attrs = attributes(doc[1])
-        @test attrs isa Dict
+        @test attrs isa Attributes
         @test attrs["a"] == "1"
         @test attrs["b"] == "2"
     end

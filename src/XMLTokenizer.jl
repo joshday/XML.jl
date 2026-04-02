@@ -138,16 +138,16 @@ end
 end
 
 @inline function _skip_whitespace(data, pos)
-    while !_iseof(data, pos) && _is_whitespace(_peek(data, pos))
+    @inbounds while !_iseof(data, pos) && _is_whitespace(_peek(data, pos))
         pos += 1
     end
     pos
 end
 
 function _skip_quoted(data, pos)
-    q = _peek(data, pos)
+    q = @inbounds _peek(data, pos)
     pos += 1
-    while !_iseof(data, pos)
+    @inbounds while !_iseof(data, pos)
         _peek(data, pos) == q && return pos + 1
         pos += 1
     end
@@ -187,7 +187,7 @@ end
 #-----------------------------------------------------------------------# S_DEFAULT tokens
 function _read_text(data, pos)
     start = pos
-    while !_iseof(data, pos) && _peek(data, pos) != UInt8('<')
+    @inbounds while !_iseof(data, pos) && _peek(data, pos) != UInt8('<')
         pos += 1
     end
     tok = Token(TOKEN_TEXT, @inbounds SubString(data, start, prevind(data, pos)))
@@ -235,7 +235,7 @@ function _read_bang(data, pos, start)
     end
 
     # <!DOCTYPE ...> or other <! declaration
-    while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
+    @inbounds while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
         pos += 1
     end
     tok = Token(TOKEN_DOCTYPE_OPEN, @inbounds SubString(data, start, pos - 1))
@@ -245,7 +245,7 @@ end
 #-----------------------------------------------------------------------# <? (PI / XML declaration)
 function _read_pi_start(data, pos, start)
     name_start = pos
-    while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
+    @inbounds while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
         pos += 1
     end
 
@@ -265,7 +265,7 @@ end
 
 #-----------------------------------------------------------------------# Tags
 function _read_open_tag_start(data, pos, start)
-    while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
+    @inbounds while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
         pos += 1
     end
     tok = Token(TOKEN_OPEN_TAG, @inbounds SubString(data, start, pos - 1))
@@ -273,7 +273,7 @@ function _read_open_tag_start(data, pos, start)
 end
 
 function _read_close_tag_start(data, pos, start)
-    while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
+    @inbounds while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
         pos += 1
     end
     tok = Token(TOKEN_CLOSE_TAG, @inbounds SubString(data, start, pos - 1))
@@ -315,7 +315,7 @@ function _read_in_tag(data, pos, mode)
 
     # Attribute name
     name_start = pos
-    while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
+    @inbounds while !_iseof(data, pos) && _is_name_byte(_peek(data, pos))
         pos += 1
     end
     name_end = pos - 1
@@ -340,7 +340,7 @@ function _read_attr_value(data, pos, mode)
 
     start = pos
     pos += 1  # skip opening quote
-    while !_iseof(data, pos) && _peek(data, pos) != q
+    @inbounds while !_iseof(data, pos) && _peek(data, pos) != q
         pos += 1
     end
     _iseof(data, pos) && _err("unterminated attribute value", start)
@@ -354,15 +354,15 @@ end
 #-----------------------------------------------------------------------# Content bodies (comment, CDATA, PI, DOCTYPE)
 function _read_comment_body(data, pos)
     start = pos
-    while !_iseof(data, pos)
+    @inbounds while !_iseof(data, pos)
         if _peek(data, pos) == UInt8('-') &&
            _canpeek(data, pos, 1) && _peek(data, pos + 1) == UInt8('-') &&
            _canpeek(data, pos, 2) && _peek(data, pos + 2) == UInt8('>')
             content_end = prevind(data, pos)
             close_start = pos
             pos += 3
-            pending = Token(TOKEN_COMMENT_CLOSE, @inbounds SubString(data, close_start, pos - 1))
-            tok = Token(TOKEN_COMMENT_CONTENT, @inbounds SubString(data, start, content_end))
+            pending = Token(TOKEN_COMMENT_CLOSE, SubString(data, close_start, pos - 1))
+            tok = Token(TOKEN_COMMENT_CONTENT, SubString(data, start, content_end))
             return (tok, TokenizerState(pos, _M_DEFAULT, pending))
         end
         pos += 1
@@ -372,15 +372,15 @@ end
 
 function _read_cdata_body(data, pos)
     start = pos
-    while !_iseof(data, pos)
+    @inbounds while !_iseof(data, pos)
         if _peek(data, pos) == UInt8(']') &&
            _canpeek(data, pos, 1) && _peek(data, pos + 1) == UInt8(']') &&
            _canpeek(data, pos, 2) && _peek(data, pos + 2) == UInt8('>')
             content_end = prevind(data, pos)
             close_start = pos
             pos += 3
-            pending = Token(TOKEN_CDATA_CLOSE, @inbounds SubString(data, close_start, pos - 1))
-            tok = Token(TOKEN_CDATA_CONTENT, @inbounds SubString(data, start, content_end))
+            pending = Token(TOKEN_CDATA_CLOSE, SubString(data, close_start, pos - 1))
+            tok = Token(TOKEN_CDATA_CONTENT, SubString(data, start, content_end))
             return (tok, TokenizerState(pos, _M_DEFAULT, pending))
         end
         pos += 1
@@ -390,13 +390,13 @@ end
 
 function _read_pi_body(data, pos)
     start = pos
-    while !_iseof(data, pos)
+    @inbounds while !_iseof(data, pos)
         if _peek(data, pos) == UInt8('?') && _canpeek(data, pos, 1) && _peek(data, pos + 1) == UInt8('>')
             content_end = prevind(data, pos)
             close_start = pos
             pos += 2
-            pending = Token(TOKEN_PI_CLOSE, @inbounds SubString(data, close_start, pos - 1))
-            tok = Token(TOKEN_PI_CONTENT, @inbounds SubString(data, start, content_end))
+            pending = Token(TOKEN_PI_CLOSE, SubString(data, close_start, pos - 1))
+            tok = Token(TOKEN_PI_CONTENT, SubString(data, start, content_end))
             return (tok, TokenizerState(pos, _M_DEFAULT, pending))
         end
         pos += 1
@@ -407,7 +407,7 @@ end
 function _read_doctype_body(data, pos)
     start = pos
     depth = 0
-    while !_iseof(data, pos)
+    @inbounds while !_iseof(data, pos)
         b = _peek(data, pos)
         if b == UInt8('-') && _canpeek(data, pos, 1) && _peek(data, pos + 1) == UInt8('-') &&
                 pos >= 2 &&

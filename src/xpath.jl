@@ -118,6 +118,9 @@ end
 
 #-----------------------------------------------------------------------------# Predicate evaluation
 
+const _RE_ATTR_PRED = r"^@([A-Za-z_:][\w.\-:]*)$"
+const _RE_ATTR_VAL_PRED = r"^@([A-Za-z_:][\w.\-:]*)\s*=\s*['\"]([^'\"]*)['\"]$"
+
 function _eval_predicate(predicate::AbstractString, nodes::Vector{Node{S}}, root::Node{S}) where S
     s = strip(predicate)
 
@@ -135,14 +138,14 @@ function _eval_predicate(predicate::AbstractString, nodes::Vector{Node{S}}, root
     end
 
     # [@attr] — has attribute
-    m = match(r"^@([A-Za-z_:][\w.\-:]*)$", s)
+    m = match(_RE_ATTR_PRED, s)
     if !isnothing(m)
         attr_name = m.captures[1]
         return filter(n -> n.nodetype === Element && haskey(n, attr_name), nodes)
     end
 
     # [@attr='value'] or [@attr="value"]
-    m = match(r"^@([A-Za-z_:][\w.\-:]*)\s*=\s*['\"]([^'\"]*)['\"]$", s)
+    m = match(_RE_ATTR_VAL_PRED, s)
     if !isnothing(m)
         attr_name = m.captures[1]
         attr_val = m.captures[2]
