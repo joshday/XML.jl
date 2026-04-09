@@ -193,6 +193,144 @@ function _lazy_skip_until!(iter, target::TokenKind)
     end
 end
 
+_token_end(tok) = tok.raw.offset + tok.raw.ncodeunits
+
+function _scan_to_close(iter, close_kind::TokenKind)
+    for tok in iter
+        tok.kind === close_kind && return _token_end(tok)
+    end
+    error("Could not find closing token")
+end
+
+#-----------------------------------------------------------------------------# sourcetext
+"""
+    sourcetext(n::LazyNode) -> SubString{String}
+
+Return the original source text of the node as a `SubString`, with no parsing, escaping,
+or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy nodes.
+"""
+function sourcetext(n::LazyNode)
+    nt = n.nodetype
+    start = _lazy_pos(n)
+    if nt === Element
+        iter = _lazy_tokenizer(n)
+        for tok in iter
+            tok.kind === TOKEN_SELF_CLOSE && return SubString(n.data, start, _token_end(tok))
+            tok.kind === TOKEN_TAG_CLOSE && break
+        end
+        depth = 1
+        for tok in iter
+            k = tok.kind
+            if k === TOKEN_OPEN_TAG
+                depth += 1
+            elseif k === TOKEN_SELF_CLOSE
+                depth -= 1
+            elseif k === TOKEN_CLOSE_TAG
+                depth -= 1
+                if depth == 0
+                    result = iterate(iter)
+                    result === nothing && error("Could not find closing '>'")
+                    return SubString(n.data, start, _token_end(result[1]))
+                end
+            end
+        end
+        error("Could not find closing tag")
+    elseif nt === Comment
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_COMMENT_CLOSE))
+    elseif nt === CData
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_CDATA_CLOSE))
+    elseif nt === ProcessingInstruction
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_PI_CLOSE))
+    elseif nt === Declaration
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_XML_DECL_CLOSE))
+    elseif nt === DTD
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_DOCTYPE_CLOSE))
+    elseif nt === Text
+        return n.token.raw
+    elseif nt === Document
+        return SubString(n.data)
+    end
+end
+
+#-----------------------------------------------------------------------------# write
+write(n::LazyNode) = String(sourcetext(n))
+write(filename::AbstractString, n::LazyNode) = Base.write(filename, sourcetext(n))
+write(io::IO, n::LazyNode) = Base.write(io, sourcetext(n))
+
+#-----------------------------------------------------------------------------# eachchildnode
+struct LazyChildIterator{S <: AbstractString, I}
+    data::S
+    iter::I
+    done::Base.RefValue{Bool}
+end
+
+Base.IteratorSize(::Type{<:LazyChildIterator}) = Base.SizeUnknown()
+Base.eltype(::Type{LazyChildIterator{S,I}}) where {S,I} = LazyNode{S}
+
+"""
+    eachchildnode(n::LazyNode)
+
+Return a lazy iterator over the children of `n`, yielding one [`LazyNode`](@ref) at a time
+without collecting them all into a vector.
+
+See also [`children`](@ref), which returns a `Vector{LazyNode}`.
+"""
+function eachchildnode(n::LazyNode{S}) where {S}
+    nt = n.nodetype
+    iter = _lazy_tokenizer(n)
+    if nt === Document
+        return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(false))
+    elseif nt === Element
+        for tok in iter
+            if tok.kind === TOKEN_SELF_CLOSE
+                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(true))
+            elseif tok.kind === TOKEN_TAG_CLOSE
+                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(false))
+            end
+        end
+    end
+    LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(true))
+end
+
+function Base.iterate(ci::LazyChildIterator, _ = nothing)
+    ci.done[] && return nothing
+    for tok in ci.iter
+        k = tok.kind
+        if k === TOKEN_TEXT
+            return (LazyNode(ci.data, tok, Text), nothing)
+        elseif k === TOKEN_OPEN_TAG
+            node = LazyNode(ci.data, tok, Element)
+            _lazy_skip_element!(ci.iter)
+            return (node, nothing)
+        elseif k === TOKEN_COMMENT_OPEN
+            node = LazyNode(ci.data, tok, Comment)
+            _lazy_skip_until!(ci.iter, TOKEN_COMMENT_CLOSE)
+            return (node, nothing)
+        elseif k === TOKEN_CDATA_OPEN
+            node = LazyNode(ci.data, tok, CData)
+            _lazy_skip_until!(ci.iter, TOKEN_CDATA_CLOSE)
+            return (node, nothing)
+        elseif k === TOKEN_PI_OPEN
+            node = LazyNode(ci.data, tok, ProcessingInstruction)
+            _lazy_skip_until!(ci.iter, TOKEN_PI_CLOSE)
+            return (node, nothing)
+        elseif k === TOKEN_XML_DECL_OPEN
+            node = LazyNode(ci.data, tok, Declaration)
+            _lazy_skip_until!(ci.iter, TOKEN_XML_DECL_CLOSE)
+            return (node, nothing)
+        elseif k === TOKEN_DOCTYPE_OPEN
+            node = LazyNode(ci.data, tok, DTD)
+            _lazy_skip_until!(ci.iter, TOKEN_DOCTYPE_CLOSE)
+            return (node, nothing)
+        elseif k === TOKEN_CLOSE_TAG || k === TOKEN_TAG_CLOSE
+            ci.done[] = true
+            return nothing
+        end
+    end
+    ci.done[] = true
+    return nothing
+end
+
 #-----------------------------------------------------------------------------# is_simple / simple_value
 function is_simple(n::LazyNode)
     n.nodetype === Element || return false

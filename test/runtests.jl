@@ -3201,6 +3201,158 @@ end
         @test simple_value(child_els[1]) == "inner"
         @test tag(child_els[2]) == "empty"
     end
+
+    @testset "sourcetext" begin
+        @testset "self-closing element" begin
+            doc = parse("<root/>", LazyNode)
+            @test sourcetext(doc[1]) == "<root/>"
+        end
+
+        @testset "element with attributes" begin
+            xml = """<root attr="val"/>"""
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc[1]) == xml
+        end
+
+        @testset "element with children" begin
+            xml = "<root><child>text</child></root>"
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc[1]) == xml
+            root = doc[1]
+            child = first(c for c in children(root) if nodetype(c) == Element)
+            @test sourcetext(child) == "<child>text</child>"
+        end
+
+        @testset "nested elements" begin
+            xml = "<a><b><c>deep</c></b></a>"
+            doc = parse(xml, LazyNode)
+            a = doc[1]
+            @test sourcetext(a) == xml
+            b = first(c for c in children(a) if nodetype(c) == Element)
+            @test sourcetext(b) == "<b><c>deep</c></b>"
+        end
+
+        @testset "comment" begin
+            xml = "<!-- hello --><root/>"
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc[1]) == "<!-- hello -->"
+        end
+
+        @testset "cdata" begin
+            xml = "<root><![CDATA[some <data>]]></root>"
+            doc = parse(xml, LazyNode)
+            cdata = first(c for c in children(doc[1]) if nodetype(c) == CData)
+            @test sourcetext(cdata) == "<![CDATA[some <data>]]>"
+        end
+
+        @testset "processing instruction" begin
+            xml = "<?target data?><root/>"
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc[1]) == "<?target data?>"
+        end
+
+        @testset "declaration" begin
+            xml = """<?xml version="1.0"?><root/>"""
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc[1]) == """<?xml version="1.0"?>"""
+        end
+
+        @testset "DTD" begin
+            xml = """<!DOCTYPE html SYSTEM "html.dtd"><html/>"""
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc[1]) == """<!DOCTYPE html SYSTEM "html.dtd">"""
+        end
+
+        @testset "text node" begin
+            doc = parse("<root>hello world</root>", LazyNode)
+            txt = first(c for c in children(doc[1]) if nodetype(c) == Text)
+            @test sourcetext(txt) == "hello world"
+        end
+
+        @testset "document" begin
+            xml = "<root>hello</root>"
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc) == xml
+        end
+
+        @testset "mixed content" begin
+            xml = "<p>Hello <b>world</b> and <i>more</i></p>"
+            doc = parse(xml, LazyNode)
+            @test sourcetext(doc[1]) == xml
+        end
+    end
+
+    @testset "write(::LazyNode)" begin
+        @testset "write returns String" begin
+            xml = "<root><child>text</child></root>"
+            doc = parse(xml, LazyNode)
+            @test XML.write(doc[1]) == xml
+            @test XML.write(doc[1]) isa String
+        end
+
+        @testset "write to IO" begin
+            xml = "<root><child>text</child></root>"
+            doc = parse(xml, LazyNode)
+            io = IOBuffer()
+            XML.write(io, doc[1])
+            @test String(take!(io)) == xml
+        end
+    end
+
+    @testset "eachchildnode" begin
+        @testset "matches children for element" begin
+            xml = "<root><a/><b>text</b><c><d/></c></root>"
+            doc = parse(xml, LazyNode)
+            root = doc[1]
+            eager = children(root)
+            lazy = collect(eachchildnode(root))
+            @test length(eager) == length(lazy)
+            @test map(nodetype, eager) == map(nodetype, lazy)
+            @test map(tag, eager) == map(tag, lazy)
+        end
+
+        @testset "self-closing element has no children" begin
+            doc = parse("<root/>", LazyNode)
+            @test isempty(collect(eachchildnode(doc[1])))
+        end
+
+        @testset "document children" begin
+            xml = """<?xml version="1.0"?><!-- comment --><root/>"""
+            doc = parse(xml, LazyNode)
+            eager = children(doc)
+            lazy = collect(eachchildnode(doc))
+            @test length(eager) == length(lazy)
+            @test map(nodetype, eager) == map(nodetype, lazy)
+        end
+
+        @testset "mixed content types" begin
+            xml = """<root>text<!-- comment --><![CDATA[cdata]]><?pi data?><child/></root>"""
+            doc = parse(xml, LazyNode)
+            root = doc[1]
+            types = [nodetype(c) for c in eachchildnode(root)]
+            @test Text in types
+            @test Comment in types
+            @test CData in types
+            @test ProcessingInstruction in types
+            @test Element in types
+        end
+
+        @testset "sourcetext works on eachchildnode results" begin
+            xml = "<sst><si><t>hello</t></si><si><t>world</t></si></sst>"
+            doc = parse(xml, LazyNode)
+            root = doc[1]
+            results = [XML.write(c) for c in eachchildnode(root)]
+            @test results == ["<si><t>hello</t></si>", "<si><t>world</t></si>"]
+        end
+
+        @testset "non-element/document returns empty" begin
+            xml = "<!-- comment --><root/>"
+            doc = parse(xml, LazyNode)
+            comment = doc[1]
+            @test nodetype(comment) == Comment
+            @test isempty(collect(eachchildnode(comment)))
+        end
+    end
 end
 
 include("test_pugixml.jl")

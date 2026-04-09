@@ -2,37 +2,54 @@
 
 ```
 Parse (small)
-	v0.3.8              0.116 ms
-	String             0.0351 ms  (69.7% faster)
-	SubString          0.0309 ms  (73.4% faster)
+	v0.3.8              0.141 ms
+	String             0.0415 ms  (70.5% faster)
+	SubString          0.0349 ms  (75.2% faster)
+	LazyNode          6.62e-6 ms  (100.0% faster)
 
 Parse (medium)
-	v0.3.8              736.0 ms
-	String              170.0 ms  (76.9% faster)
-	SubString           162.0 ms  (77.9% faster)
+	v0.3.8              768.0 ms
+	String              193.0 ms  (74.8% faster)
+	SubString           174.0 ms  (77.3% faster)
+	LazyNode          6.75e-6 ms  (100.0% faster)
 
 Write (small)
-	v0.3.8             0.0257 ms
-	dev                0.0212 ms  (17.7% faster)
+	v0.3.8              0.027 ms
+	dev                0.0212 ms  (21.6% faster)
+	LazyNode         0.000229 ms  (99.2% faster)
 
 Write (medium)
-	v0.3.8              154.0 ms
-	dev                  84.6 ms  (44.9% faster)
+	v0.3.8              158.0 ms
+	dev                  96.4 ms  (39.0% faster)
+	LazyNode         0.000289 ms  (100.0% faster)
 
 Read file (medium)
-	v0.3.8              714.0 ms
-	String              177.0 ms  (75.2% faster)
-	SubString           171.0 ms  (76.1% faster)
+	v0.3.8              739.0 ms
+	String              196.0 ms  (73.5% faster)
+	SubString           176.0 ms  (76.3% faster)
 
 Collect tags (small)
-	v0.3.8           0.000527 ms
-	String           0.000614 ms  (16.5% slower)
-	SubString         0.00177 ms  (235.1% slower)
+	v0.3.8           0.000656 ms
+	String           0.000716 ms  (9.1% slower)
+	SubString           0.002 ms  (205.4% slower)
 
 Collect tags (medium)
-	v0.3.8               25.0 ms
-	String               10.9 ms  (56.4% faster)
-	SubString            16.0 ms  (36.0% faster)
+	v0.3.8               22.3 ms
+	String               12.4 ms  (44.5% faster)
+	SubString            16.4 ms  (26.4% faster)
+
+sourcetext
+	small            0.000201 ms
+	medium           0.000259 ms
+
+children vs eachchildnode (medium)
+	children             76.2 ms
+	eachchildnode        77.3 ms
+
+SST-like: parse+iterate+write (10k)
+	Node                 9.01 ms
+	LazyNode+children       9.22 ms
+	LazyNode+eachchildnode       9.61 ms
 
 ```
 

@@ -3,8 +3,8 @@ module XML
 export
     Node, LazyNode, NodeType, Attributes,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
-    nodetype, tag, attributes, value, children,
-    is_simple, simple_value,
+    nodetype, tag, attributes, value, children, eachchildnode,
+    is_simple, simple_value, sourcetext,
     depth, siblings,
     xpath,
     h
