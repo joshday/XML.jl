@@ -10,6 +10,10 @@ instead of building a full tree in memory.
 
 Supports the same read-only interface as `Node`: [`nodetype`](@ref), [`tag`](@ref),
 [`attributes`](@ref), [`value`](@ref), [`children`](@ref), plus integer and string indexing.
+
+Accessor methods (`tag`, `value`, `keys`, `attributes`) return `SubString{String}` views
+into the original document rather than allocated `String`s, so reading a large document
+through `LazyNode` does not duplicate its text data.
 """
 struct LazyNode{S <: AbstractString}
     data::S
@@ -30,9 +34,9 @@ _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 function tag(n::LazyNode)
     nt = n.nodetype
     if nt === Element
-        return String(tag_name(n.token))
+        return tag_name(n.token)
     elseif nt === ProcessingInstruction
-        return String(pi_target(n.token))
+        return pi_target(n.token)
     end
     nothing
 end
@@ -44,15 +48,15 @@ function value(n::LazyNode)
     elseif nt === Comment
         iter = _lazy_tokenizer(n)
         iterate(iter)  # COMMENT_OPEN
-        return String(iterate(iter)[1].raw)
+        return iterate(iter)[1].raw
     elseif nt === CData
         iter = _lazy_tokenizer(n)
         iterate(iter)  # CDATA_OPEN
-        return String(iterate(iter)[1].raw)
+        return iterate(iter)[1].raw
     elseif nt === DTD
         iter = _lazy_tokenizer(n)
         iterate(iter)  # DOCTYPE_OPEN
-        return String(lstrip(iterate(iter)[1].raw))
+        return lstrip(iterate(iter)[1].raw)
     elseif nt === ProcessingInstruction
         iter = _lazy_tokenizer(n)
         iterate(iter)  # PI_OPEN
@@ -60,23 +64,29 @@ function value(n::LazyNode)
         result === nothing && return nothing
         result[1].kind === TOKEN_PI_CONTENT || return nothing
         content = strip(result[1].raw)
-        return isempty(content) ? nothing : String(content)
+        return isempty(content) ? nothing : content
     end
     nothing
 end
 
 #-----------------------------------------------------------------------------# attributes
+# Promote a `String` returned from `unescape` to a SubString so the homogeneous
+# `Attributes{SubString{String}}` parameterization works. The String was already
+# allocated for entity decoding; the SubString wrapper is just a view on top.
+@inline _as_substring(s::SubString{String}) = s
+@inline _as_substring(s::String) = SubString(s, 1, lastindex(s))
+
 function attributes(n::LazyNode)
     n.nodetype in (Element, Declaration) || return nothing
     iter = _lazy_tokenizer(n)
     iterate(iter)  # skip OPEN_TAG or XML_DECL_OPEN
-    attrs = Pair{String,String}[]
+    attrs = Pair{SubString{String}, SubString{String}}[]
     for tok in iter
         tok.kind === TOKEN_ATTR_NAME || break
-        name = String(tok.raw)
+        name = tok.raw
         result = iterate(iter)
         result === nothing && break
-        push!(attrs, name => unescape(attr_value(result[1])))
+        push!(attrs, name => _as_substring(unescape(attr_value(result[1]))))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
@@ -112,10 +122,10 @@ function Base.keys(n::LazyNode)
     n.nodetype in (Element, Declaration) || return ()
     iter = _lazy_tokenizer(n)
     iterate(iter)
-    result = String[]
+    result = SubString{String}[]
     for tok in iter
         tok.kind === TOKEN_ATTR_NAME || break
-        push!(result, String(tok.raw))
+        push!(result, tok.raw)
         iterate(iter)  # skip value
     end
     result
