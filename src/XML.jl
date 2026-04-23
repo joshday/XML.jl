@@ -46,14 +46,25 @@ end
 
 """
     unescape(x::AbstractString) -> String
+    unescape(x::SubString{String}) -> Union{SubString{String}, String}
 
 Unescape XML entities in `x`: the five predefined entities (`&amp;` `&lt;` `&gt;` `&apos;`
 `&quot;`) and numeric character references (`&#123;`, `&#xAB;`).  Each reference is processed
 exactly once (no double-unescaping).
+
+When `x` is a `SubString{String}` and contains no `&`, the input is returned unchanged
+to avoid allocating — handy when scanning lots of text through the lazy parser.
 """
 function unescape(x::AbstractString)
     occursin('&', x) || return string(x)
     s = string(x)
+    occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
+    replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
+end
+
+function unescape(x::SubString{String})
+    occursin('&', x) || return x
+    s = String(x)
     occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
     replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
 end
@@ -450,6 +461,24 @@ function _print_attrs(io::IO, attributes)
     end
 end
 
+@inline function _is_ignorable_text(node::Node)
+    node.nodetype === Text && !isnothing(node.value) && all(isspace, node.value)
+end
+
+# Mixed content = at least one Text/CData child carrying actual (non-whitespace) data.
+# In that case the original whitespace is significant and we must not reformat.
+function _has_significant_text(children)
+    for c in children
+        nt = c.nodetype
+        if nt === Text
+            (!isnothing(c.value) && !all(isspace, c.value)) && return true
+        elseif nt === CData
+            return true
+        end
+    end
+    false
+end
+
 function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::Bool=false)
     pad = preserve ? "" : _indent_str(indent * depth)
     nt = node.nodetype
@@ -473,12 +502,21 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
             _write_xml(io, only(ch), 0, 0, child_preserve)
             print(io, "</", node.tag, '>')
         else
-            child_preserve ? print(io, '>') : println(io, '>')
+            # If real Text or any CData lives among the children, treat as mixed
+            # content and preserve the original layout. Otherwise pretty-print
+            # and skip whitespace-only Text children — those were emitted by the
+            # parser purely to round-trip source whitespace, and the writer
+            # regenerates indentation from the tree shape.
+            effective_preserve = child_preserve || _has_significant_text(ch)
+            effective_preserve ? print(io, '>') : println(io, '>')
             for child in ch
-                _write_xml(io, child, depth + 1, indent, child_preserve)
-                child_preserve || println(io)
+                if !effective_preserve && _is_ignorable_text(child)
+                    continue
+                end
+                _write_xml(io, child, depth + 1, indent, effective_preserve)
+                effective_preserve || println(io)
             end
-            print(io, child_preserve ? "" : pad, "</", node.tag, '>')
+            print(io, effective_preserve ? "" : pad, "</", node.tag, '>')
         end
     elseif nt === Declaration
         print(io, pad, "<?xml")
@@ -497,9 +535,14 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
     elseif nt === Document
         ch = node.children
         if !isnothing(ch)
-            for (i, child) in enumerate(ch)
+            # Drop whitespace-only Text between top-level nodes when pretty
+            # printing (XML grammar disallows text at document level, so any
+            # such Text comes from inter-node whitespace in the source).
+            visible = preserve ? ch : filter(!_is_ignorable_text, ch)
+            n_visible = length(visible)
+            for (i, child) in enumerate(visible)
                 _write_xml(io, child, 0, indent, preserve)
-                i < length(ch) && println(io)
+                i < n_visible && println(io)
             end
         end
     end
