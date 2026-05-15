@@ -524,12 +524,17 @@ const _INDENT_STRINGS = [" " ^ n for n in 0:_MAX_CACHED_INDENT]
 end
 
 # Serialize `key="escaped-value"` pairs for an attributes vector (no leading space outside).
+# Uses byte-level `Base.write` instead of `print` to avoid the varargs-print dispatch
+# overhead that shows up under profile when an element has many attributes.
 function _print_attrs(io::IO, attributes)
     isnothing(attributes) && return
     for (k, v) in attributes
-        print(io, ' ', k, "=\"")
+        Base.write(io, UInt8(' '))
+        Base.write(io, k)
+        Base.write(io, UInt8('='))
+        Base.write(io, UInt8('"'))
         _write_escaped(io, v)
-        print(io, '"')
+        Base.write(io, UInt8('"'))
     end
 end
 
@@ -568,15 +573,21 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
                 k == "xml:space" && (child_preserve = v == "preserve")
             end
         end
-        print(io, pad, '<', node.tag)
+        Base.write(io, pad)
+        Base.write(io, UInt8('<'))
+        Base.write(io, node.tag)
         _print_attrs(io, node.attributes)
         ch = node.children
         if isnothing(ch) || isempty(ch)
-            print(io, "/>")
+            Base.write(io, UInt8('/'))
+            Base.write(io, UInt8('>'))
         elseif length(ch) == 1 && only(ch).nodetype === Text
-            print(io, '>')
+            Base.write(io, UInt8('>'))
             _write_xml(io, only(ch), 0, 0, child_preserve)
-            print(io, "</", node.tag, '>')
+            Base.write(io, UInt8('<'))
+            Base.write(io, UInt8('/'))
+            Base.write(io, node.tag)
+            Base.write(io, UInt8('>'))
         else
             # If real Text or any CData lives among the children, treat as mixed
             # content and preserve the original layout. Otherwise pretty-print
@@ -584,30 +595,54 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
             # parser purely to round-trip source whitespace, and the writer
             # regenerates indentation from the tree shape.
             effective_preserve = child_preserve || _has_significant_text(ch)
-            effective_preserve ? print(io, '>') : println(io, '>')
+            if effective_preserve
+                Base.write(io, UInt8('>'))
+            else
+                Base.write(io, UInt8('>'))
+                Base.write(io, UInt8('\n'))
+            end
             for child in ch
                 if !effective_preserve && _is_ignorable_text(child)
                     continue
                 end
                 _write_xml(io, child, depth + 1, indent, effective_preserve)
-                effective_preserve || println(io)
+                effective_preserve || Base.write(io, UInt8('\n'))
             end
-            print(io, effective_preserve ? "" : pad, "</", node.tag, '>')
+            effective_preserve || Base.write(io, pad)
+            Base.write(io, UInt8('<'))
+            Base.write(io, UInt8('/'))
+            Base.write(io, node.tag)
+            Base.write(io, UInt8('>'))
         end
     elseif nt === Declaration
-        print(io, pad, "<?xml")
+        Base.write(io, pad)
+        Base.write(io, "<?xml")
         _print_attrs(io, node.attributes)
-        print(io, "?>")
+        Base.write(io, "?>")
     elseif nt === ProcessingInstruction
-        print(io, pad, "<?", node.tag)
-        isnothing(node.value) || print(io, ' ', node.value)
-        print(io, "?>")
+        Base.write(io, pad)
+        Base.write(io, "<?")
+        Base.write(io, node.tag)
+        if !isnothing(node.value)
+            Base.write(io, UInt8(' '))
+            Base.write(io, node.value)
+        end
+        Base.write(io, "?>")
     elseif nt === Comment
-        print(io, pad, "<!--", node.value, "-->")
+        Base.write(io, pad)
+        Base.write(io, "<!--")
+        Base.write(io, node.value)
+        Base.write(io, "-->")
     elseif nt === CData
-        print(io, pad, "<![CDATA[", node.value, "]]>")
+        Base.write(io, pad)
+        Base.write(io, "<![CDATA[")
+        Base.write(io, node.value)
+        Base.write(io, "]]>")
     elseif nt === DTD
-        print(io, pad, "<!DOCTYPE ", node.value, '>')
+        Base.write(io, pad)
+        Base.write(io, "<!DOCTYPE ")
+        Base.write(io, node.value)
+        Base.write(io, UInt8('>'))
     elseif nt === Document
         ch = node.children
         if !isnothing(ch)
@@ -618,7 +653,7 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
             n_visible = length(visible)
             for (i, child) in enumerate(visible)
                 _write_xml(io, child, 0, indent, preserve)
-                i < n_visible && println(io)
+                i < n_visible && Base.write(io, UInt8('\n'))
             end
         end
     end

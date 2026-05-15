@@ -281,16 +281,16 @@ Benchmark source: [benchmarks.jl](benchmarks/benchmarks.jl).  Test data: `books.
 
                       Write (small) — median time (ms)
 
-     XML.jl  ■■■■■■■ 0.018
-      EzXML  ■■■■ 0.0104
+     XML.jl  ■■■■ 0.00965
+      EzXML  ■■■■ 0.0107
    LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.102
 
 
                       Write (medium) — median time (ms)
 
-     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 80.8
-      EzXML  ■■■■■■■■■■■■■■■■■ 35.1
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■ 52.8
+     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 50.5
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■ 37.8
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 62.8
 
 
                         Read file — median time (ms)
