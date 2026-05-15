@@ -2,43 +2,43 @@
 
 ```
 Parse (small)
-	XML.jl              0.038 ms
-	XML.jl (SS)        0.0302 ms
-	EzXML              0.0238 ms  (XML.jl 59.7% slower)
-	LightXML            0.027 ms  (XML.jl 41.0% slower)
-	XMLDict             0.222 ms  (XML.jl 82.9% faster)
+	XML.jl             0.0341 ms
+	XML.jl (SS)        0.0271 ms
+	EzXML              0.0224 ms  (XML.jl 52.3% slower)
+	LightXML            0.022 ms  (XML.jl 55.2% slower)
+	XMLDict             0.205 ms  (XML.jl 83.4% faster)
 
 Parse (medium)
-	XML.jl              214.0 ms
-	XML.jl (SS)         179.0 ms
-	EzXML                93.5 ms  (XML.jl 128.8% slower)
-	LightXML            102.0 ms  (XML.jl 109.7% slower)
-	XMLDict             676.0 ms  (XML.jl 68.4% faster)
+	XML.jl              188.0 ms
+	XML.jl (SS)         159.0 ms
+	EzXML                81.4 ms  (XML.jl 131.3% slower)
+	LightXML            122.0 ms  (XML.jl 53.9% slower)
+	XMLDict             582.0 ms  (XML.jl 67.6% faster)
 
 Write (small)
-	XML.jl             0.0192 ms
-	EzXML              0.0113 ms  (XML.jl 69.5% slower)
-	LightXML             0.11 ms  (XML.jl 82.6% faster)
+	XML.jl             0.0182 ms
+	EzXML              0.0106 ms  (XML.jl 72.0% slower)
+	LightXML            0.104 ms  (XML.jl 82.4% faster)
 
 Write (medium)
-	XML.jl               99.8 ms
-	EzXML                48.8 ms  (XML.jl 104.4% slower)
-	LightXML             62.6 ms  (XML.jl 59.3% slower)
+	XML.jl               83.3 ms
+	EzXML                39.7 ms  (XML.jl 109.8% slower)
+	LightXML             55.0 ms  (XML.jl 51.5% slower)
 
 Read file
-	XML.jl              223.0 ms
-	EzXML               137.0 ms  (XML.jl 62.4% slower)
-	LightXML            114.0 ms  (XML.jl 96.5% slower)
+	XML.jl              189.0 ms
+	EzXML               127.0 ms  (XML.jl 48.3% slower)
+	LightXML            102.0 ms  (XML.jl 85.3% slower)
 
 Collect tags (small)
-	XML.jl           0.000615 ms
-	EzXML             0.00231 ms  (XML.jl 73.3% faster)
-	LightXML           0.0038 ms  (XML.jl 83.8% faster)
+	XML.jl           0.000592 ms
+	EzXML             0.00244 ms  (XML.jl 75.8% faster)
+	LightXML          0.00393 ms  (XML.jl 84.9% faster)
 
 Collect tags (medium)
-	XML.jl               18.3 ms
-	EzXML                32.4 ms  (XML.jl 43.5% faster)
-	LightXML             29.9 ms  (XML.jl 38.8% faster)
+	XML.jl               15.7 ms
+	EzXML                18.0 ms  (XML.jl 12.5% faster)
+	LightXML             23.8 ms  (XML.jl 34.0% faster)
 
 ```
 

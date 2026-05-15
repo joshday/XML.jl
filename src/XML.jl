@@ -3,8 +3,8 @@ module XML
 export
     Node, LazyNode, NodeType, Attributes,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
-    nodetype, tag, attributes, value, children, eachchildnode,
-    is_simple, simple_value, sourcetext,
+    nodetype, tag, attributes, value, children, children!, eachchildnode, eachattribute,
+    is_simple, simple_value, is_simple_value, sourcetext,
     depth, siblings,
     xpath,
     h
@@ -40,14 +40,25 @@ end
 
 """
     unescape(x::AbstractString) -> String
+    unescape(x::SubString{String}) -> Union{SubString{String}, String}
 
 Unescape XML entities in `x`: the five predefined entities (`&amp;` `&lt;` `&gt;` `&apos;`
 `&quot;`) and numeric character references (`&#123;`, `&#xAB;`). Each reference is processed
 exactly once (no double-unescaping).
+
+When `x` is a `SubString{String}` containing no `&`, the input is returned unchanged with
+no allocation — the common case for typical XML attribute and text content.
 """
 function unescape(x::AbstractString)
     s = string(x)
     occursin('&', s) || return s
+    occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
+    replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
+end
+
+function unescape(x::SubString{String})
+    occursin('&', x) || return x
+    s = String(x)
     occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
     replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
 end
@@ -227,6 +238,15 @@ Return the textual content of a simple element (see [`is_simple`](@ref)). Errors
 """
 simple_value(o::Node) = is_simple(o) ? o.children[1].value :
     error("`simple_value` is only defined for simple nodes.")
+
+"""
+    is_simple_value(node) -> Union{Nothing, String, SubString{String}}
+
+Combined predicate-and-accessor: return the simple text/CData value of `node` if it is a
+simple element (see [`is_simple`](@ref)), or `nothing` otherwise. Avoids the redundant
+tokenization that `is_simple(n) ? simple_value(n) : ...` does on `LazyNode`.
+"""
+is_simple_value(o::Node) = is_simple(o) ? o.children[1].value : nothing
 
 #-----------------------------------------------------------------------------# tree navigation
 

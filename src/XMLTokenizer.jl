@@ -92,7 +92,33 @@ struct Tokenizer{S <: AbstractString}
 end
 
 tokenize(xml::AbstractString) = Tokenizer(xml, 1)
-tokenize(xml::AbstractString, pos::Int) = Iterators.Stateful(Tokenizer(xml, pos))
+tokenize(xml::AbstractString, pos::Int) = StatefulTokenizer(Tokenizer(xml, pos))
+
+# Lightweight mutable holder that drives the immutable `Tokenizer`'s iterate protocol with
+# a single state field — avoids the `Union{VS,Nothing}` field and per-iteration tuple
+# storage that `Iterators.Stateful` carries.
+mutable struct StatefulTokenizer{S <: AbstractString}
+    const t::Tokenizer{S}
+    state::TokenizerState{S}
+    done::Bool
+end
+
+StatefulTokenizer(t::Tokenizer{S}) where {S <: AbstractString} =
+    StatefulTokenizer{S}(t, TokenizerState(t.start, M_DEFAULT, no_token(t.data)), false)
+
+Base.IteratorSize(::Type{<:StatefulTokenizer}) = Base.SizeUnknown()
+Base.eltype(::Type{StatefulTokenizer{S}}) where {S} = Token{S}
+
+@inline function Base.iterate(st::StatefulTokenizer, _ = nothing)
+    st.done && return nothing
+    r = iterate(st.t, st.state)
+    if r === nothing
+        st.done = true
+        return nothing
+    end
+    st.state = r[2]
+    (r[1], nothing)
+end
 
 function Base.show(io::IO, t::Tokenizer)
     n = ncodeunits(t.data)

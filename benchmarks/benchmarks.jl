@@ -10,8 +10,8 @@ using InteractiveUtils
 include("XMarkGenerator.jl")
 using .XMarkGenerator
 
-BenchmarkTools.DEFAULT_PARAMETERS.seconds = 10
-BenchmarkTools.DEFAULT_PARAMETERS.samples = 20000
+BenchmarkTools.DEFAULT_PARAMETERS.seconds = 3
+BenchmarkTools.DEFAULT_PARAMETERS.samples = 2000
 
 #-----------------------------------------------------------------------------# Test data
 # Small file (~120 lines)
@@ -114,6 +114,232 @@ end
 @add_benchmark "Collect tags (medium)" "XML.jl" xml_collect_tags(o) setup=(o = parse(medium_xml, Node))
 @add_benchmark "Collect tags (medium)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(medium_xml))
 @add_benchmark "Collect tags (medium)" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(medium_xml)) teardown=(LightXML.free(o))
+
+#-----------------------------------------------------------------------------# XLSX-pattern fixtures
+# These fixtures mirror the shapes that XLSX.jl exercises:
+# - `sst_xml` matches `xl/sharedStrings.xml` (lots of small `<si><t>…</t></si>` entries
+#   separated by whitespace — the layout that exposes the LazyNode write/normalize choice)
+# - `ws_xml` matches `xl/sheetN.xml` (a `<sheetData>` with many `<row>`s of `<c r=… s=… t=…><v>…</v></c>`)
+
+@info "Generating XLSX-pattern fixtures..."
+
+sst_xml = let buf = IOBuffer()
+    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    print(buf, "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"50000\" uniqueCount=\"50000\">\n")
+    for i in 1:50000
+        print(buf, "  <si><t>shared string value number ", i, "</t></si>\n")
+    end
+    print(buf, "</sst>")
+    String(take!(buf))
+end
+
+ws_xml = let buf = IOBuffer()
+    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    print(buf, "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n")
+    print(buf, "<sheetData>\n")
+    for r in 1:3000
+        print(buf, "  <row r=\"", r, "\">")
+        for c in 1:15
+            col = Char(UInt32('A') + c - 1)
+            print(buf, "<c r=\"", col, r, "\" s=\"3\" t=\"n\"><v>", r * c, "</v></c>")
+        end
+        print(buf, "</row>\n")
+    end
+    print(buf, "</sheetData></worksheet>")
+    String(take!(buf))
+end
+
+@info "  sst_xml: $(round(length(sst_xml) / 1024 / 1024, digits=2)) MB ($(50000) <si>)"
+@info "  ws_xml:  $(round(length(ws_xml) / 1024 / 1024, digits=2)) MB ($(3000) <row> × $(15) <c>)"
+
+# Helper: walk a Node-based <si> subtree and concatenate its <t> text content.
+function _node_unformatted(io::IO, el::Node{String})
+    XML.tag(el) == "rPh" && return
+    if XML.tag(el) == "t"
+        if XML.is_simple(el)
+            write(io, XML.simple_value(el))
+        else
+            v = XML.value(el)
+            isnothing(v) || write(io, v)
+        end
+        return
+    end
+    for c in XML.children(el)
+        _node_unformatted(io, c)
+    end
+end
+_node_unformatted(el::Node{String}) = sprint(_node_unformatted, el)
+
+#-----------------------------------------------------------------------------# Parse: XLSX shapes
+@add_benchmark "Parse SST (LazyNode)" "XML.jl" parse($sst_xml, LazyNode)
+@add_benchmark "Parse SST (LazyNode)" "Node (for ref)" parse($sst_xml, Node)
+@add_benchmark "Parse worksheet (LazyNode)" "XML.jl" parse($ws_xml, LazyNode)
+@add_benchmark "Parse worksheet (LazyNode)" "Node (for ref)" parse($ws_xml, Node)
+
+#-----------------------------------------------------------------------------# SST loading (XLSX.jl sst.jl pattern)
+# Mirrors `sst_load!`: stream <si> children, capture raw XML + unformatted text per entry.
+
+@add_benchmark "SST: write each <si>" "LazyNode + write (zero-copy)" begin
+    out = String[]
+    sst_el = doc[end]
+    for si in XML.eachchildnode(sst_el)
+        XML.nodetype(si) === XML.Element || continue
+        push!(out, XML.write(si))
+    end
+    out
+end setup=(doc = parse(sst_xml, LazyNode))
+
+@add_benchmark "SST: write each <si>" "LazyNode + write (normalize)" begin
+    out = String[]
+    sst_el = doc[end]
+    for si in XML.eachchildnode(sst_el)
+        XML.nodetype(si) === XML.Element || continue
+        push!(out, XML.write(si; normalize=true))
+    end
+    out
+end setup=(doc = parse(sst_xml, LazyNode))
+
+@add_benchmark "SST: write each <si>" "Node (for ref)" begin
+    out = String[]
+    sst_el = doc[end]
+    for si in XML.children(sst_el)
+        XML.tag(si) == "si" || continue
+        push!(out, XML.write(si))
+    end
+    out
+end setup=(doc = parse(sst_xml, Node))
+
+@add_benchmark "SST: unformatted text" "LazyNode + is_simple_value" begin
+    out = Vector{Union{Nothing,SubString{String},String}}()
+    sst_el = doc[end]
+    for si in XML.eachchildnode(sst_el)
+        XML.nodetype(si) === XML.Element || continue
+        for t in XML.eachchildnode(si)
+            XML.nodetype(t) === XML.Element || continue
+            XML.tag(t) == "t" || continue
+            push!(out, XML.is_simple_value(t))
+        end
+    end
+    out
+end setup=(doc = parse(sst_xml, LazyNode))
+
+@add_benchmark "SST: unformatted text" "Node (for ref)" begin
+    out = String[]
+    sst_el = doc[end]
+    for si in XML.children(sst_el)
+        XML.tag(si) == "si" || continue
+        push!(out, _node_unformatted(si))
+    end
+    out
+end setup=(doc = parse(sst_xml, Node))
+
+#-----------------------------------------------------------------------------# Worksheet: nested row/cell loops (XLSX.jl cell.jl pattern)
+# Mirrors `Cell(c::LazyNode, ws)` and `get_rowcells!`: iterate <row>, then <c>, then attrs + <v>.
+
+@add_benchmark "Worksheet: collect rows" "children() (fresh Vector each call)" begin
+    sd = doc[end][1]  # <sheetData>
+    XML.children(sd)
+end setup=(doc = parse(ws_xml, LazyNode))
+
+@add_benchmark "Worksheet: collect rows" "children!(buf, n) (reused buffer)" begin
+    sd = doc[end][1]
+    XML.children!(buf, sd)
+end setup=(doc = parse(ws_xml, LazyNode); buf = XML.LazyNode{String}[])
+
+@add_benchmark "Worksheet: attribute scan" "eachattribute" begin
+    n = 0
+    sd = doc[end][1]
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            for (k, v) in XML.eachattribute(c)
+                n += sizeof(v)
+            end
+        end
+    end
+    n
+end setup=(doc = parse(ws_xml, LazyNode))
+
+@add_benchmark "Worksheet: attribute scan" "attributes() (materialize dict)" begin
+    n = 0
+    sd = doc[end][1]
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            a = XML.attributes(c)
+            isnothing(a) && continue
+            for (_, v) in a
+                n += sizeof(v)
+            end
+        end
+    end
+    n
+end setup=(doc = parse(ws_xml, LazyNode))
+
+@add_benchmark "Worksheet: single attr fetch" "get(c, \"r\", \"\")" begin
+    n = 0
+    sd = doc[end][1]
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            n += sizeof(get(c, "r", ""))
+        end
+    end
+    n
+end setup=(doc = parse(ws_xml, LazyNode))
+
+@add_benchmark "Worksheet: single attr fetch" "attributes(c)[\"r\"]" begin
+    n = 0
+    sd = doc[end][1]
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            a = XML.attributes(c)
+            isnothing(a) && continue
+            n += sizeof(a["r"])
+        end
+    end
+    n
+end setup=(doc = parse(ws_xml, LazyNode))
+
+@add_benchmark "Worksheet: <v> value" "is_simple_value" begin
+    n = 0
+    sd = doc[end][1]
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            for v in XML.eachchildnode(c)
+                XML.nodetype(v) === XML.Element || continue
+                val = XML.is_simple_value(v)
+                isnothing(val) || (n += sizeof(val))
+            end
+        end
+    end
+    n
+end setup=(doc = parse(ws_xml, LazyNode))
+
+@add_benchmark "Worksheet: <v> value" "is_simple + simple_value" begin
+    n = 0
+    sd = doc[end][1]
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            for v in XML.eachchildnode(c)
+                XML.nodetype(v) === XML.Element || continue
+                if XML.is_simple(v)
+                    n += sizeof(XML.simple_value(v))
+                end
+            end
+        end
+    end
+    n
+end setup=(doc = parse(ws_xml, LazyNode))
 
 #-----------------------------------------------------------------------------# Write benchmarks_results.md
 _fmt_ms(t) = string(round(t, sigdigits=3), " ms")

@@ -91,6 +91,14 @@ function attributes(n::LazyNode)
     isempty(attrs) ? nothing : Attributes(attrs)
 end
 
+"""
+    get(n::LazyNode, key::AbstractString, default)
+
+Return the value of attribute `key` on `n`, or `default` if absent. Walks the token stream
+once — no `Attributes` allocation — so this is the recommended way to read a single
+attribute from a `LazyNode`. Use [`eachattribute`](@ref) to stream all attribute pairs
+without allocating, or [`attributes`](@ref) for the materialized dict.
+"""
 function Base.get(n::LazyNode, key::AbstractString, default)
     n.nodetype in (Element, Declaration) || return default
     iter = _lazy_tokenizer(n)
@@ -106,6 +114,51 @@ function Base.get(n::LazyNode, key::AbstractString, default)
         end
     end
     default
+end
+
+#-----------------------------------------------------------------------------# eachattribute
+struct LazyAttrIterator{I}
+    iter::I
+    done::Base.RefValue{Bool}
+end
+
+Base.IteratorSize(::Type{<:LazyAttrIterator}) = Base.SizeUnknown()
+Base.eltype(::Type{<:LazyAttrIterator}) = Pair{SubString{String}, Union{SubString{String}, String}}
+
+"""
+    eachattribute(n::LazyNode)
+
+Lazy iterator yielding `name => value` pairs for the attributes of `n` (an `Element` or
+`Declaration`). Does not allocate an [`Attributes`](@ref) dict or intermediate vector;
+suitable for hot paths that only need to scan attributes.
+
+For a single attribute by name, prefer `get(n, key, default)` — it short-circuits as soon
+as the match is found.
+"""
+function eachattribute(n::LazyNode)
+    iter = _lazy_tokenizer(n)
+    is_attrs = n.nodetype === Element || n.nodetype === Declaration
+    is_attrs && iterate(iter)  # skip OPEN_TAG / XML_DECL_OPEN
+    LazyAttrIterator{typeof(iter)}(iter, Ref(!is_attrs))
+end
+
+function Base.iterate(it::LazyAttrIterator, _ = nothing)
+    it.done[] && return nothing
+    r = iterate(it.iter)
+    isnothing(r) && (it.done[] = true; return nothing)
+    tok = r[1]
+    if tok.kind !== TokenKinds.ATTR_NAME
+        it.done[] = true
+        return nothing
+    end
+    name = tok.raw
+    r = iterate(it.iter)
+    if isnothing(r)
+        it.done[] = true
+        return nothing
+    end
+    val = unescape(attr_value(r[1]))
+    ((name => val), nothing)
 end
 
 function Base.getindex(n::LazyNode, key::AbstractString)
@@ -134,21 +187,34 @@ end
 #-----------------------------------------------------------------------------# children
 function children(n::LazyNode{S}) where {S}
     nt = n.nodetype
+    (nt === Document || nt === Element) || return ()
+    children!(LazyNode{S}[], n)
+end
+
+"""
+    children!(buf::Vector{LazyNode{S}}, n::LazyNode{S}) -> buf
+
+Collect children of `n` into `buf` (cleared first) and return it. Lets callers reuse a
+single buffer across many nodes — useful when streaming through siblings (e.g. XLSX row
+iteration) to avoid one `Vector` allocation per node.
+"""
+function children!(buf::Vector{LazyNode{S}}, n::LazyNode{S}) where {S}
+    empty!(buf)
+    nt = n.nodetype
     if nt === Document
-        return _lazy_collect_children(n.data, _lazy_tokenizer(n))
+        return _lazy_collect_children!(buf, n.data, _lazy_tokenizer(n))
     elseif nt !== Element
-        return ()
+        return buf
     end
     iter = _lazy_tokenizer(n)
     for tok in iter
-        tok.kind === TokenKinds.SELF_CLOSE && return LazyNode{S}[]
+        tok.kind === TokenKinds.SELF_CLOSE && return buf
         tok.kind === TokenKinds.TAG_CLOSE && break
     end
-    _lazy_collect_children(n.data, iter)
+    _lazy_collect_children!(buf, n.data, iter)
 end
 
-function _lazy_collect_children(data::S, iter) where {S <: AbstractString}
-    result = LazyNode{S}[]
+function _lazy_collect_children!(result::Vector{LazyNode{S}}, data::S, iter) where {S <: AbstractString}
     for tok in iter
         k = tok.kind
         if k === TokenKinds.TEXT
@@ -263,9 +329,34 @@ function sourcetext(n::LazyNode)
 end
 
 #-----------------------------------------------------------------------------# write
-write(n::LazyNode) = String(sourcetext(n))
-write(filename::AbstractString, n::LazyNode) = Base.write(filename, sourcetext(n))
-write(io::IO, n::LazyNode) = Base.write(io, sourcetext(n))
+"""
+    write(n::LazyNode; normalize::Bool=false, indentsize::Int=2) -> String
+    write(io::IO, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
+    write(filename::AbstractString, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
+
+Serialize a `LazyNode`. With `normalize=false` (the default) the result is the node's
+original source bytes (zero-copy via [`sourcetext`](@ref)) — fast, but any source-side
+whitespace between tags is preserved verbatim.
+
+With `normalize=true` the node is parsed into a `Node` tree and re-serialized, which
+collapses incidental source whitespace and pretty-prints with `indentsize`-space
+indentation.
+"""
+function write(n::LazyNode; normalize::Bool=false, indentsize::Int=2)
+    normalize ? write(parse(String(sourcetext(n)), Node); indentsize) : String(sourcetext(n))
+end
+
+function write(io::IO, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
+    if normalize
+        write(io, parse(String(sourcetext(n)), Node); indentsize)
+    else
+        Base.write(io, sourcetext(n))
+    end
+end
+
+function write(filename::AbstractString, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
+    open(io -> write(io, n; normalize, indentsize), filename, "w")
+end
 
 #-----------------------------------------------------------------------------# eachchildnode
 struct LazyChildIterator{S <: AbstractString, I}
@@ -357,6 +448,41 @@ function simple_value(n::LazyNode)
     ch = children(n)
     length(ch) == 1 && ch[1].nodetype in (Text, CData) || error("`simple_value` is only defined for simple nodes.")
     value(ch[1])
+end
+
+# Single-pass combined predicate+accessor: returns the simple text/CData value, or
+# `nothing` if `n` is not a simple element. Avoids the double tokenization of
+# `is_simple(n) ? simple_value(n) : ...`.
+function is_simple_value(n::LazyNode)
+    n.nodetype === Element || return nothing
+    iter = _lazy_tokenizer(n)
+    iterate(iter)  # skip OPEN_TAG
+    found_close = false
+    for tok in iter
+        k = tok.kind
+        k === TokenKinds.TAG_CLOSE && (found_close = true; break)
+        return nothing  # attributes (ATTR_NAME), self-close, or anything else => not simple
+    end
+    found_close || return nothing
+    result = iterate(iter)
+    isnothing(result) && return nothing
+    tok = result[1]
+    k = tok.kind
+    if k === TokenKinds.TEXT
+        nxt = iterate(iter)
+        (isnothing(nxt) || nxt[1].kind !== TokenKinds.CLOSE_TAG) && return nothing
+        return unescape(tok.raw)
+    elseif k === TokenKinds.CDATA_OPEN
+        r = iterate(iter)
+        (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CONTENT) && return nothing
+        content = r[1].raw
+        r = iterate(iter)
+        (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CLOSE) && return nothing
+        r = iterate(iter)
+        (isnothing(r) || r[1].kind !== TokenKinds.CLOSE_TAG) && return nothing
+        return content
+    end
+    nothing
 end
 
 #-----------------------------------------------------------------------------# indexing

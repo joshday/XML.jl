@@ -36,7 +36,7 @@ Every node in the XML DOM is represented by `Node`, a single type parametrized o
 ```
 nodetype(node)      -> XML.NodeType (an enum)
 tag(node)           -> String or Nothing
-attributes(node)    -> Dict{String, String} or Nothing
+attributes(node)    -> XML.Attributes{String} or Nothing
 value(node)         -> String or Nothing
 children(node)      -> Vector{Node}
 is_simple(node)     -> Bool (e.g. <tag>text</tag>)
@@ -170,25 +170,25 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 
 # Streaming Tokenizer
 
-For large files or when you need fine-grained control, `XML.XMLTokenizer` provides a streaming tokenizer that yields tokens without building a DOM:
+For large files or when you need fine-grained control, `XML.XMLTokenizer` provides a streaming tokenizer that yields tokens without building a DOM. Token kinds live in the `XML.XMLTokenizer.TokenKinds` baremodule (e.g. `TokenKinds.OPEN_TAG`, `TokenKinds.TEXT`).
 
 ```julia
-using XML.XMLTokenizer
+using XML.XMLTokenizer: tokenize
 
 for token in tokenize("<root><child attr=\"val\">text</child></root>")
     println(token.kind, " => ", repr(String(token.raw)))
 end
-# TOKEN_OPEN_TAG => "<root"
-# TOKEN_TAG_CLOSE => ">"
-# TOKEN_OPEN_TAG => "<child"
-# TOKEN_ATTR_NAME => "attr"
-# TOKEN_ATTR_VALUE => "\"val\""
-# TOKEN_TAG_CLOSE => ">"
-# TOKEN_TEXT => "text"
-# TOKEN_CLOSE_TAG => "</child"
-# TOKEN_TAG_CLOSE => ">"
-# TOKEN_CLOSE_TAG => "</root"
-# TOKEN_TAG_CLOSE => ">"
+# OPEN_TAG => "<root"
+# TAG_CLOSE => ">"
+# OPEN_TAG => "<child"
+# ATTR_NAME => "attr"
+# ATTR_VALUE => "\"val\""
+# TAG_CLOSE => ">"
+# TEXT => "text"
+# CLOSE_TAG => "</child"
+# TAG_CLOSE => ">"
+# CLOSE_TAG => "</root"
+# TAG_CLOSE => ">"
 ```
 
 <br>
@@ -203,6 +203,19 @@ doc = read("file.xml", LazyNode)
 ```
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
+
+For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
+
+```julia
+sourcetext(n)               # zero-copy SubString view of the node's raw source bytes
+eachchildnode(n)            # lazy iterator over children — no Vector allocation
+children!(buf, n)           # collect children into a reusable buffer
+eachattribute(n)            # lazy iterator over attribute name=>value pairs
+is_simple_value(n)          # combined is_simple + simple_value (one tokenizer pass)
+get(n, key, default)        # single-attribute read without building Attributes
+XML.write(n)                # zero-copy: returns node's original source text
+XML.write(n; normalize=true) # re-parse + pretty-print, collapses source whitespace
+```
 
 ### Memory-mapped files
 
@@ -228,61 +241,61 @@ Benchmark source: [benchmarks.jl](benchmarks/benchmarks.jl).  Test data: `books.
 ```
                          Parse (small) — median time (ms)
 
-        XML.jl  ■■■■■■■ 0.041
-   XML.jl (SS)  ■■■■■■ 0.034
-         EzXML  ■■■■■ 0.030
-      LightXML  ■■■■■■ 0.033
-       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.232
+        XML.jl  ■■■■■■ 0.0317
+   XML.jl (SS)  ■■■■■ 0.0277
+         EzXML  ■■■■ 0.0206
+      LightXML  ■■■■ 0.0219
+       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.207
 
 
                          Parse (medium) — median time (ms)
 
-        XML.jl  ■■■■■■■■■■■■ 194.2
-   XML.jl (SS)  ■■■■■■■■■■ 172.8
-         EzXML  ■■■■■■ 105.8
-      LightXML  ■■■■■■ 105.0
-       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 687.7
+        XML.jl  ■■■■■■■■■■■■■ 170.0
+   XML.jl (SS)  ■■■■■■■■■■■ 146.0
+         EzXML  ■■■■■■ 76.2
+      LightXML  ■■■■■■ 78.6
+       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 532.0
 
 
                       Write (small) — median time (ms)
 
-     XML.jl  ■■■■■■■■ 0.021
-      EzXML  ■■■■ 0.012
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.110
+     XML.jl  ■■■■■■■ 0.018
+      EzXML  ■■■■ 0.0104
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.102
 
 
                       Write (medium) — median time (ms)
 
-     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 93.2
-      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 84.6
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■ 60.4
+     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 80.8
+      EzXML  ■■■■■■■■■■■■■■■■■ 35.1
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■ 52.8
 
 
                         Read file — median time (ms)
 
-     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 214.1
-      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■ 143.1
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■ 121.9
+     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 166.0
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■ 108.0
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■ 94.8
 
 
                    Collect tags (small) — median time (ms)
 
-     XML.jl  ■■■■■■ 0.000698
-      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■ 0.00255
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.00430
+     XML.jl  ■■■■■■ 0.00059
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■ 0.00209
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 0.00379
 
 
                   Collect tags (medium) — median time (ms)
 
-     XML.jl  ■■■■■■■■■■■■■■■■■■■ 12.6
-      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 20.5
-   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 27.6
+     XML.jl  ■■■■■■■■■■■■■■■■■■■■■■ 13.0
+      EzXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 16.8
+   LightXML  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 24.0
 ```
 
 ```julia
 versioninfo()
-# Julia Version 1.12.5
-# Commit 5fe89b8ddc1 (2026-02-09 16:05 UTC)
+# Julia Version 1.12.6
+# Commit 15346901f00 (2026-04-09 19:20 UTC)
 # Build Info:
 #   Official https://julialang.org release
 # Platform Info:
