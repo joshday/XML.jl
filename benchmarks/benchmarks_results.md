@@ -2,76 +2,76 @@
 
 ```
 Parse (small)
-	XML.jl             0.0368 ms
-	XML.jl (SS)        0.0338 ms
-	EzXML               0.026 ms  (XML.jl 41.6% slower)
-	LightXML           0.0231 ms  (XML.jl 58.9% slower)
-	XMLDict             0.242 ms  (XML.jl 84.8% faster)
+	XML.jl             0.0353 ms
+	XML.jl (SS)        0.0321 ms
+	EzXML              0.0219 ms  (XML.jl 61.2% slower)
+	LightXML           0.0228 ms  (XML.jl 54.7% slower)
+	XMLDict             0.191 ms  (XML.jl 81.5% faster)
 
 Parse (medium)
-	XML.jl              183.0 ms
-	XML.jl (SS)         171.0 ms
-	EzXML                92.7 ms  (XML.jl 97.1% slower)
-	LightXML            139.0 ms  (XML.jl 31.5% slower)
-	XMLDict             634.0 ms  (XML.jl 71.2% faster)
+	XML.jl              179.0 ms
+	XML.jl (SS)         169.0 ms
+	EzXML                79.4 ms  (XML.jl 125.3% slower)
+	LightXML            124.0 ms  (XML.jl 43.7% slower)
+	XMLDict             611.0 ms  (XML.jl 70.7% faster)
 
 Write (small)
-	XML.jl             0.0116 ms
-	EzXML              0.0127 ms  (XML.jl 8.5% faster)
-	LightXML            0.118 ms  (XML.jl 90.2% faster)
+	XML.jl            0.00988 ms
+	EzXML              0.0107 ms  (XML.jl 7.4% faster)
+	LightXML            0.106 ms  (XML.jl 90.7% faster)
 
 Write (medium)
-	XML.jl               54.4 ms
-	EzXML                63.5 ms  (XML.jl 14.3% faster)
-	LightXML             70.2 ms  (XML.jl 22.5% faster)
+	XML.jl               49.9 ms
+	EzXML                52.4 ms  (~same)
+	LightXML             56.3 ms  (XML.jl 11.2% faster)
 
 Read file
-	XML.jl              202.0 ms
-	EzXML               151.0 ms  (XML.jl 33.6% slower)
-	LightXML            123.0 ms  (XML.jl 63.5% slower)
+	XML.jl              181.0 ms
+	EzXML               128.0 ms  (XML.jl 41.3% slower)
+	LightXML             96.4 ms  (XML.jl 87.6% slower)
 
 Collect tags (small)
-	XML.jl             0.0007 ms
-	EzXML             0.00262 ms  (XML.jl 73.3% faster)
-	LightXML          0.00426 ms  (XML.jl 83.6% faster)
+	XML.jl           0.000598 ms
+	EzXML             0.00211 ms  (XML.jl 71.7% faster)
+	LightXML          0.00385 ms  (XML.jl 84.5% faster)
 
 Collect tags (medium)
-	XML.jl               14.8 ms
-	EzXML                33.2 ms  (XML.jl 55.4% faster)
-	LightXML             29.8 ms  (XML.jl 50.3% faster)
+	XML.jl               13.5 ms
+	EzXML                17.2 ms  (XML.jl 21.6% faster)
+	LightXML             27.0 ms  (XML.jl 50.1% faster)
 
 Parse SST (LazyNode)
-	XML.jl            6.29e-6 ms
-	Node (for ref)       57.0 ms  (XML.jl 100.0% faster)
+	XML.jl            5.33e-6 ms
+	Node (for ref)       42.3 ms  (XML.jl 100.0% faster)
 
 Parse worksheet (LazyNode)
-	XML.jl            6.38e-6 ms
-	Node (for ref)       68.5 ms  (XML.jl 100.0% faster)
+	XML.jl            5.62e-6 ms
+	Node (for ref)       66.1 ms  (XML.jl 100.0% faster)
 
 SST: write each <si>
-	LazyNode + write (zero-copy)     95.2 ms
-	LazyNode + write (normalize)    166.0 ms
-	Node (for ref)       11.8 ms
+	LazyNode + write (zero-copy)     84.8 ms
+	LazyNode + write (normalize)    144.0 ms
+	Node (for ref)       10.5 ms
 
 SST: unformatted text
-	LazyNode + is_simple_value    109.0 ms
-	Node (for ref)       6.27 ms
+	LazyNode + is_simple_value     91.4 ms
+	Node (for ref)       5.31 ms
 
 Worksheet: collect rows
-	children() (fresh Vector each call)     85.0 ms
-	children!(buf, n) (reused buffer)     86.5 ms
+	children() (fresh Vector each call)     81.7 ms
+	children!(buf, n) (reused buffer)     82.4 ms
 
 Worksheet: attribute scan
-	eachattribute        79.0 ms
-	attributes() (materialize dict)     72.9 ms
+	eachattribute        82.6 ms
+	attributes() (materialize dict)     83.5 ms
 
 Worksheet: single attr fetch
-	get(c, "r", "")      77.0 ms
-	attributes(c)["r"]     75.3 ms
+	get(c, "r", "")      83.4 ms
+	attributes(c)["r"]     82.8 ms
 
 Worksheet: <v> value
-	is_simple_value      83.2 ms
-	is_simple + simple_value     73.4 ms
+	is_simple_value      82.7 ms
+	is_simple + simple_value     83.5 ms
 
 ```
 

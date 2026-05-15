@@ -218,19 +218,19 @@ end
 @noinline err(msg::AbstractString, pos::Int) = throw(ArgumentError("XML tokenizer error at position $pos: $msg"))
 
 #-----------------------------------------------------------------------# Text and markup
-# Read text content up to the next '<'. Tracks whether any '&' is present so the parser
-# can skip `unescape`'s redundant byte scan.
+# Read text content up to the next '<'. Uses `findnext` (memchr-backed for `String`) to
+# find the end-of-text delimiter, then scans for `&` only within the text region — a full
+# document `findnext('&', ...)` would be O(doc_size) per text token and degrade to
+# O(doc_size²) on entity-free documents.
 function read_text(data::AbstractString, pos::Int)
     start = pos
-    has_amp = false
-    @inbounds while !iseof(data, pos)
-        b = peek(data, pos)
-        b == UInt8('<') && break
-        b == UInt8('&') && (has_amp = true)
-        pos += 1
-    end
-    tok = Token{typeof(data)}(TokenKinds.TEXT, has_amp, @inbounds(SubString(data, start, prevind(data, pos))))
-    (tok, TokenizerState(pos, M_DEFAULT, no_token(data)))
+    n = ncodeunits(data)
+    lt_idx = findnext('<', data, pos)
+    end_pos = isnothing(lt_idx) ? n + 1 : lt_idx
+    raw = @inbounds SubString(data, start, prevind(data, end_pos))
+    has_amp = occursin('&', raw)
+    tok = Token{typeof(data)}(TokenKinds.TEXT, has_amp, raw)
+    (tok, TokenizerState(end_pos, M_DEFAULT, no_token(data)))
 end
 
 # Dispatch on the character after '<' to the appropriate reader
@@ -378,8 +378,9 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
-# Read a quoted attribute value (including the quotes). Tracks `&` presence for the
-# entity-decode short-circuit downstream.
+# Read a quoted attribute value (including the quotes). Same shape as `read_text`: use
+# `findnext` for the closing quote (memchr-backed for `String`), then a bounded `occursin`
+# over the value range for entity detection so we never scan past the quote.
 function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
     iseof(data, pos) && err("expected attribute value", pos)
 
@@ -388,18 +389,17 @@ function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
 
     start = pos
     pos += 1  # skip opening quote
-    has_amp = false
-    @inbounds while !iseof(data, pos)
-        b = peek(data, pos)
-        b == q && break
-        b == UInt8('&') && (has_amp = true)
-        pos += 1
-    end
-    iseof(data, pos) && err("unterminated attribute value", start)
-    pos += 1  # skip closing quote
+    quote_char = Char(q)
+    close_idx = findnext(quote_char, data, pos)
+    isnothing(close_idx) && err("unterminated attribute value", start)
+    # Value range is [pos, close_idx - 1]; entity check is bounded to this view.
+    inner = @inbounds SubString(data, pos, prevind(data, close_idx))
+    has_amp = occursin('&', inner)
+    pos = close_idx + 1  # one past the closing quote (always ASCII)
 
     next_state = (mode == M_XML_DECL_VALUE) ? M_XML_DECL : M_TAG
-    tok = Token{typeof(data)}(TokenKinds.ATTR_VALUE, has_amp, @inbounds(SubString(data, start, pos - 1)))
+    raw = @inbounds SubString(data, start, pos - 1)
+    tok = Token{typeof(data)}(TokenKinds.ATTR_VALUE, has_amp, raw)
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
