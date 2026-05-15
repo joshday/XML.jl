@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New streaming tokenizer (`XMLTokenizer` module) for fine-grained XML token iteration.
 - XPath support via `xpath(node, path)`.
 - `test/test_libxml2_testcases.jl`: 243 test cases borrowed from the [libxml2](https://github.com/GNOME/libxml2) test suite covering CDATA, comments, processing instructions, attributes, namespaces, DTD internal subsets, entity references, whitespace handling, Unicode, error cases, and real-world document patterns.
+- `AbstractTrees` package extension: loading both `XML` and `AbstractTrees` enables `print_tree`, `PreOrderDFS`, `Leaves`, etc. on `Node` and `LazyNode`.
 
 ### Fixed
 - **Tokenizer: multi-byte UTF-8 in attribute values** — Parsing attribute values containing multi-byte UTF-8 characters (e.g., `<doc city="東京"/>`) could produce a `StringIndexError` because `attr_value()` used byte arithmetic (`ncodeunits - 1`) instead of `prevind` to strip quotes. The same issue existed in `_read_attr_value!`.

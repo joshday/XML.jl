@@ -3355,6 +3355,7 @@ end
     end
 end
 
+include("test_abstracttrees_ext.jl")
 include("test_pugixml.jl")
 include("test_libexpat.jl")
 include("test_w3c.jl")

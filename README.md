@@ -232,6 +232,28 @@ end
 
 <br>
 
+# AbstractTrees Integration
+
+Loading [`AbstractTrees`](https://github.com/JuliaCollections/AbstractTrees.jl) alongside XML enables tree-walking utilities (`print_tree`, `PreOrderDFS`, `Leaves`, etc.) on both `Node` and `LazyNode`:
+
+```julia
+using XML, AbstractTrees
+
+doc = parse("<a><b/><c><d/></c></a>", Node)
+print_tree(doc)
+# Document
+# └─ <a>
+#    ├─ <b>
+#    └─ <c>
+#       └─ <d>
+
+for n in PreOrderDFS(doc)
+    nodetype(n) == Element && println(tag(n))
+end
+```
+
+<br>
+
 # Benchmarks
 
 Benchmark source: [benchmarks.jl](benchmarks/benchmarks.jl).  Test data: `books.xml` (small, ~4 KB) and a generated XMark auction XML (medium, ~14 MB).
