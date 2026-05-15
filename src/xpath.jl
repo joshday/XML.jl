@@ -17,6 +17,24 @@
 
 #-----------------------------------------------------------------------------# Token types
 
+"""
+    XPathTokenKind
+
+Discriminator for the kinds of tokens produced by [`_xpath_tokenize`](@ref).
+
+| Variant            | Source syntax            |
+|--------------------|--------------------------|
+| `XPATH_ROOT`       | `/` (path separator)     |
+| `XPATH_DESCENDANT` | `//`                     |
+| `XPATH_NAME`       | element tag name         |
+| `XPATH_WILDCARD`   | `*`                      |
+| `XPATH_DOT`        | `.` (self)               |
+| `XPATH_DOTDOT`     | `..` (parent)            |
+| `XPATH_TEXT_FN`    | `text()`                 |
+| `XPATH_NODE_FN`    | `node()`                 |
+| `XPATH_PREDICATE`  | `[...]` body             |
+| `XPATH_ATTRIBUTE`  | `@attr` (result position) |
+"""
 @enum XPathTokenKind::UInt8 begin
     XPATH_ROOT           # /
     XPATH_DESCENDANT     # //
@@ -30,6 +48,14 @@
     XPATH_ATTRIBUTE      # @attr (in result position)
 end
 
+"""
+    XPathToken
+
+A single token from a parsed XPath expression: a [`XPathTokenKind`](@ref) tag together with
+the relevant textual payload (tag name, predicate body, attribute name, etc.). Tokens with
+no payload (`XPATH_ROOT`, `XPATH_WILDCARD`, …) carry the literal source character(s) for
+debuggability.
+"""
 struct XPathToken
     kind::XPathTokenKind
     value::String
@@ -37,6 +63,9 @@ end
 
 #-----------------------------------------------------------------------------# Tokenizer
 
+# Lex an XPath expression into a flat token stream. Whitespace is discarded; unterminated
+# predicates / function calls and unrecognised characters raise an error. Tokens preserve
+# source order and are consumed left-to-right by `xpath`.
 function _xpath_tokenize(expr::AbstractString)
     tokens = XPathToken[]
     s = String(expr)
@@ -121,6 +150,10 @@ end
 const _RE_ATTR_PRED = r"^@([A-Za-z_:][\w.\-:]*)$"
 const _RE_ATTR_VAL_PRED = r"^@([A-Za-z_:][\w.\-:]*)\s*=\s*['\"]([^'\"]*)['\"]$"
 
+# Filter `nodes` by the body of a `[...]` predicate. Supports positional indices `[n]`
+# (1-based; out-of-range yields empty), `[last()]`, `[@attr]` (has-attribute), and
+# `[@attr='value']` / `[@attr="value"]` (attribute equals literal). Anything else errors.
+# `root` is accepted for symmetry with `_xpath_step` but is unused by current predicates.
 function _eval_predicate(predicate::AbstractString, nodes::Vector{Node{S}}, root::Node{S}) where S
     s = strip(predicate)
 
@@ -157,6 +190,11 @@ end
 
 #-----------------------------------------------------------------------------# Step evaluation
 
+# Apply a single non-predicate, non-descendant step to the current context and return the
+# new context. Handles XPATH_NAME, XPATH_WILDCARD, XPATH_DOT, XPATH_DOTDOT, XPATH_TEXT_FN,
+# XPATH_NODE_FN. XPATH_DESCENDANT is intentionally not handled here — the main evaluator
+# expands `//` to descendant-or-self before the next step. `root` is used by `..` to avoid
+# walking past the document root.
 function _xpath_step(nodes::Vector{Node{S}}, token::XPathToken, root::Node{S}) where S
     result = Node{S}[]
     k = token.kind
@@ -205,6 +243,8 @@ function _xpath_step(nodes::Vector{Node{S}}, token::XPathToken, root::Node{S}) w
     result
 end
 
+# Append every descendant of `node` (children, grandchildren, ...) to `out` in document
+# order. Does not include `node` itself.
 function _descendants!(out::Vector{Node{S}}, node::Node{S}) where S
     for c in children(node)
         push!(out, c)
@@ -212,6 +252,8 @@ function _descendants!(out::Vector{Node{S}}, node::Node{S}) where S
     end
 end
 
+# Implements XPath's descendant-or-self axis: for each input node, emit the node itself
+# followed by all of its descendants in document order.
 function _descendants(nodes::Vector{Node{S}}) where S
     result = Node{S}[]
     for n in nodes

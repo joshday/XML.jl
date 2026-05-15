@@ -1,47 +1,51 @@
 module XMLTokenizer
 
-#-----------------------------------------------------------------------# TokenKind
-@enum TokenKind::UInt8 begin
-    # Character data
-    TOKEN_TEXT               # text content between markup
+#-----------------------------------------------------------------------# TokenKinds
+baremodule TokenKinds
+    import Base: @enum
 
-    # Element tags
-    TOKEN_OPEN_TAG           # <name
-    TOKEN_CLOSE_TAG          # </name
-    TOKEN_TAG_CLOSE          # >
-    TOKEN_SELF_CLOSE         # />
-    TOKEN_ATTR_NAME          # attribute name
-    TOKEN_ATTR_VALUE         # "value" or 'value' (with quotes in raw)
+    @enum Kind::UInt8 begin
+        # Character data
+        TEXT               # text content between markup
 
-    # CDATA sections
-    TOKEN_CDATA_OPEN         # <![CDATA[
-    TOKEN_CDATA_CONTENT      # raw text content
-    TOKEN_CDATA_CLOSE        # ]]>
+        # Element tags
+        OPEN_TAG           # <name
+        CLOSE_TAG          # </name
+        TAG_CLOSE          # >
+        SELF_CLOSE         # />
+        ATTR_NAME          # attribute name
+        ATTR_VALUE         # "value" or 'value' (with quotes in raw)
 
-    # Comments
-    TOKEN_COMMENT_OPEN       # <!--
-    TOKEN_COMMENT_CONTENT    # comment text
-    TOKEN_COMMENT_CLOSE      # -->
+        # CDATA sections
+        CDATA_OPEN         # <![CDATA[
+        CDATA_CONTENT      # raw text content
+        CDATA_CLOSE        # ]]>
 
-    # Processing instructions
-    TOKEN_PI_OPEN            # <?target (includes target name)
-    TOKEN_PI_CONTENT         # PI body text
-    TOKEN_PI_CLOSE           # ?>
+        # Comments
+        COMMENT_OPEN       # <!--
+        COMMENT_CONTENT    # comment text
+        COMMENT_CLOSE      # -->
 
-    # XML declaration (<?xml ...?>)
-    TOKEN_XML_DECL_OPEN      # <?xml
-    TOKEN_XML_DECL_CLOSE     # ?>
-    # (reuses TOKEN_ATTR_NAME / TOKEN_ATTR_VALUE for pseudo-attributes)
+        # Processing instructions
+        PI_OPEN            # <?target (includes target name)
+        PI_CONTENT         # PI body text
+        PI_CLOSE           # ?>
 
-    # DOCTYPE
-    TOKEN_DOCTYPE_OPEN       # <!DOCTYPE (or other <! declarations)
-    TOKEN_DOCTYPE_CONTENT    # declaration body
-    TOKEN_DOCTYPE_CLOSE      # >
+        # XML declaration (<?xml ...?>)
+        XML_DECL_OPEN      # <?xml
+        XML_DECL_CLOSE     # ?>
+        # (reuses ATTR_NAME / ATTR_VALUE for pseudo-attributes)
+
+        # DOCTYPE
+        DOCTYPE_OPEN       # <!DOCTYPE (or other <! declarations)
+        DOCTYPE_CONTENT    # declaration body
+        DOCTYPE_CLOSE      # >
+    end
 end
 
 #-----------------------------------------------------------------------# Token
 struct Token{S <: AbstractString}
-    kind::TokenKind
+    kind::TokenKinds.Kind
     raw::SubString{S}
 end
 
@@ -71,7 +75,7 @@ struct TokenizerState{S <: AbstractString}
 end
 
 # Create an empty token (no pending token buffered)
-@inline no_token(s::AbstractString) = Token(TOKEN_TEXT, @inbounds SubString(s, 1, 0))
+@inline no_token(s::AbstractString) = Token(TokenKinds.TEXT, @inbounds SubString(s, 1, 0))
 # Check whether the state has a buffered pending token
 @inline has_pending(st::TokenizerState) = !isempty(st.pending.raw)
 
@@ -180,7 +184,7 @@ function read_text(data::AbstractString, pos::Int)
     @inbounds while !iseof(data, pos) && peek(data, pos) != UInt8('<')
         pos += 1
     end
-    tok = Token(TOKEN_TEXT, @inbounds SubString(data, start, prevind(data, pos)))
+    tok = Token(TokenKinds.TEXT, @inbounds SubString(data, start, prevind(data, pos)))
     (tok, TokenizerState(pos, M_DEFAULT, no_token(data)))
 end
 
@@ -210,7 +214,7 @@ function read_bang(data::AbstractString, pos::Int, start::Int)
         pos += 1
         (!iseof(data, pos) && peek(data, pos) == UInt8('-')) || err("expected '<!--'", start)
         pos += 1
-        tok = Token(TOKEN_COMMENT_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = Token(TokenKinds.COMMENT_OPEN, @inbounds SubString(data, start, pos - 1))
         return (tok, TokenizerState(pos, M_COMMENT, no_token(data)))
     end
 
@@ -222,7 +226,7 @@ function read_bang(data::AbstractString, pos::Int, start::Int)
             peek(data, pos) == expected || err("invalid CDATA section", start)
             pos += 1
         end
-        tok = Token(TOKEN_CDATA_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = Token(TokenKinds.CDATA_OPEN, @inbounds SubString(data, start, pos - 1))
         return (tok, TokenizerState(pos, M_CDATA, no_token(data)))
     end
 
@@ -230,7 +234,7 @@ function read_bang(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TOKEN_DOCTYPE_OPEN, @inbounds SubString(data, start, pos - 1))
+    tok = Token(TokenKinds.DOCTYPE_OPEN, @inbounds SubString(data, start, pos - 1))
     (tok, TokenizerState(pos, M_DOCTYPE, no_token(data)))
 end
 
@@ -248,10 +252,10 @@ function read_pi_start(data::AbstractString, pos::Int, start::Int)
         codeunit(data, name_start + 2) == UInt8('l')
 
     if is_xml
-        tok = Token(TOKEN_XML_DECL_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = Token(TokenKinds.XML_DECL_OPEN, @inbounds SubString(data, start, pos - 1))
         (tok, TokenizerState(pos, M_XML_DECL, no_token(data)))
     else
-        tok = Token(TOKEN_PI_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = Token(TokenKinds.PI_OPEN, @inbounds SubString(data, start, pos - 1))
         (tok, TokenizerState(pos, M_PI, no_token(data)))
     end
 end
@@ -262,7 +266,7 @@ function read_open_tag_start(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TOKEN_OPEN_TAG, @inbounds SubString(data, start, pos - 1))
+    tok = Token(TokenKinds.OPEN_TAG, @inbounds SubString(data, start, pos - 1))
     (tok, TokenizerState(pos, M_TAG, no_token(data)))
 end
 
@@ -271,7 +275,7 @@ function read_close_tag_start(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TOKEN_CLOSE_TAG, @inbounds SubString(data, start, pos - 1))
+    tok = Token(TokenKinds.CLOSE_TAG, @inbounds SubString(data, start, pos - 1))
     (tok, TokenizerState(pos, M_CLOSE_TAG, no_token(data)))
 end
 
@@ -280,7 +284,7 @@ function read_close_tag_end(data::AbstractString, pos::Int)
     pos = skip_whitespace(data, pos)
     iseof(data, pos) && err("unterminated close tag", pos)
     peek(data, pos) == UInt8('>') || err("expected '>'", pos)
-    tok = Token(TOKEN_TAG_CLOSE, @inbounds SubString(data, pos, pos))
+    tok = Token(TokenKinds.TAG_CLOSE, @inbounds SubString(data, pos, pos))
     (tok, TokenizerState(pos + 1, M_DEFAULT, no_token(data)))
 end
 
@@ -296,16 +300,16 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     # Check for end delimiters
     if is_decl
         if b == UInt8('?') && canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8('>')
-            tok = Token(TOKEN_XML_DECL_CLOSE, @inbounds SubString(data, pos, pos + 1))
+            tok = Token(TokenKinds.XML_DECL_CLOSE, @inbounds SubString(data, pos, pos + 1))
             return (tok, TokenizerState(pos + 2, M_DEFAULT, no_token(data)))
         end
     else
         if b == UInt8('>')
-            tok = Token(TOKEN_TAG_CLOSE, @inbounds SubString(data, pos, pos))
+            tok = Token(TokenKinds.TAG_CLOSE, @inbounds SubString(data, pos, pos))
             return (tok, TokenizerState(pos + 1, M_DEFAULT, no_token(data)))
         end
         if b == UInt8('/') && canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8('>')
-            tok = Token(TOKEN_SELF_CLOSE, @inbounds SubString(data, pos, pos + 1))
+            tok = Token(TokenKinds.SELF_CLOSE, @inbounds SubString(data, pos, pos + 1))
             return (tok, TokenizerState(pos + 2, M_DEFAULT, no_token(data)))
         end
     end
@@ -325,7 +329,7 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     pos = skip_whitespace(data, pos)
 
     next_state = is_decl ? M_XML_DECL_VALUE : M_TAG_VALUE
-    tok = Token(TOKEN_ATTR_NAME, @inbounds SubString(data, name_start, name_end))
+    tok = Token(TokenKinds.ATTR_NAME, @inbounds SubString(data, name_start, name_end))
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
@@ -345,7 +349,7 @@ function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
     pos += 1  # skip closing quote
 
     next_state = (mode == M_XML_DECL_VALUE) ? M_XML_DECL : M_TAG
-    tok = Token(TOKEN_ATTR_VALUE, @inbounds SubString(data, start, pos - 1))
+    tok = Token(TokenKinds.ATTR_VALUE, @inbounds SubString(data, start, pos - 1))
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
@@ -360,8 +364,8 @@ function read_comment_body(data::AbstractString, pos::Int)
             content_end = prevind(data, pos)
             close_start = pos
             pos += 3
-            pending = Token(TOKEN_COMMENT_CLOSE, SubString(data, close_start, pos - 1))
-            tok = Token(TOKEN_COMMENT_CONTENT, SubString(data, start, content_end))
+            pending = Token(TokenKinds.COMMENT_CLOSE, SubString(data, close_start, pos - 1))
+            tok = Token(TokenKinds.COMMENT_CONTENT, SubString(data, start, content_end))
             return (tok, TokenizerState(pos, M_DEFAULT, pending))
         end
         pos += 1
@@ -379,8 +383,8 @@ function read_cdata_body(data::AbstractString, pos::Int)
             content_end = prevind(data, pos)
             close_start = pos
             pos += 3
-            pending = Token(TOKEN_CDATA_CLOSE, SubString(data, close_start, pos - 1))
-            tok = Token(TOKEN_CDATA_CONTENT, SubString(data, start, content_end))
+            pending = Token(TokenKinds.CDATA_CLOSE, SubString(data, close_start, pos - 1))
+            tok = Token(TokenKinds.CDATA_CONTENT, SubString(data, start, content_end))
             return (tok, TokenizerState(pos, M_DEFAULT, pending))
         end
         pos += 1
@@ -396,8 +400,8 @@ function read_pi_body(data::AbstractString, pos::Int)
             content_end = prevind(data, pos)
             close_start = pos
             pos += 2
-            pending = Token(TOKEN_PI_CLOSE, SubString(data, close_start, pos - 1))
-            tok = Token(TOKEN_PI_CONTENT, SubString(data, start, content_end))
+            pending = Token(TokenKinds.PI_CLOSE, SubString(data, close_start, pos - 1))
+            tok = Token(TokenKinds.PI_CONTENT, SubString(data, start, content_end))
             return (tok, TokenizerState(pos, M_DEFAULT, pending))
         end
         pos += 1
@@ -437,8 +441,8 @@ function read_doctype_body(data::AbstractString, pos::Int)
             content_end = prevind(data, pos)
             close_start = pos
             pos += 1
-            pending = Token(TOKEN_DOCTYPE_CLOSE, @inbounds SubString(data, close_start, pos - 1))
-            tok = Token(TOKEN_DOCTYPE_CONTENT, @inbounds SubString(data, start, content_end))
+            pending = Token(TokenKinds.DOCTYPE_CLOSE, @inbounds SubString(data, close_start, pos - 1))
+            tok = Token(TokenKinds.DOCTYPE_CONTENT, @inbounds SubString(data, start, content_end))
             return (tok, TokenizerState(pos, M_DEFAULT, pending))
         else
             pos += 1
@@ -455,9 +459,9 @@ end
 Extract the element name from an `OPEN_TAG` or `CLOSE_TAG` token.
 """
 function tag_name(token::Token)
-    if token.kind == TOKEN_OPEN_TAG
+    if token.kind == TokenKinds.OPEN_TAG
         @inbounds SubString(token.raw, 2, ncodeunits(token.raw))  # skip '<'
-    elseif token.kind == TOKEN_CLOSE_TAG
+    elseif token.kind == TokenKinds.CLOSE_TAG
         @inbounds SubString(token.raw, 3, ncodeunits(token.raw))  # skip '</'
     else
         throw(ArgumentError("tag_name requires OPEN_TAG or CLOSE_TAG, got $(token.kind)"))
@@ -470,7 +474,7 @@ end
 Strip the surrounding quotes from an `ATTR_VALUE` token.
 """
 function attr_value(token::Token)
-    token.kind == TOKEN_ATTR_VALUE ||
+    token.kind == TokenKinds.ATTR_VALUE ||
         throw(ArgumentError("attr_value requires ATTR_VALUE, got $(token.kind)"))
     @inbounds SubString(token.raw, 2, prevind(token.raw, lastindex(token.raw)))
 end
@@ -481,7 +485,7 @@ end
 Extract the target name from a `PI_OPEN` or `XML_DECL_OPEN` token.
 """
 function pi_target(token::Token)
-    (token.kind == TOKEN_PI_OPEN || token.kind == TOKEN_XML_DECL_OPEN) ||
+    (token.kind == TokenKinds.PI_OPEN || token.kind == TokenKinds.XML_DECL_OPEN) ||
         throw(ArgumentError("pi_target requires PI_OPEN or XML_DECL_OPEN, got $(token.kind)"))
     @inbounds SubString(token.raw, 3, ncodeunits(token.raw))  # skip '<?'
 end

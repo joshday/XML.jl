@@ -11,17 +11,11 @@ export
 
 include("XMLTokenizer.jl")
 using .XMLTokenizer:
-    tokenize, tag_name, attr_value, pi_target, TokenKind, Token, Tokenizer, TokenizerState,
-    TOKEN_TEXT, TOKEN_OPEN_TAG, TOKEN_CLOSE_TAG, TOKEN_TAG_CLOSE, TOKEN_SELF_CLOSE,
-    TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
-    TOKEN_CDATA_OPEN, TOKEN_CDATA_CONTENT, TOKEN_CDATA_CLOSE,
-    TOKEN_COMMENT_OPEN, TOKEN_COMMENT_CONTENT, TOKEN_COMMENT_CLOSE,
-    TOKEN_PI_OPEN, TOKEN_PI_CONTENT, TOKEN_PI_CLOSE,
-    TOKEN_XML_DECL_OPEN, TOKEN_XML_DECL_CLOSE,
-    TOKEN_DOCTYPE_OPEN, TOKEN_DOCTYPE_CONTENT, TOKEN_DOCTYPE_CLOSE
+    XMLTokenizer, tokenize, tag_name, attr_value, pi_target,
+    TokenKinds, Token, Tokenizer, TokenizerState
 
 #-----------------------------------------------------------------------------# escape/unescape
-const escape_chars = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '\'' => "&apos;", '"' => "&quot;")
+const ESCAPE_CHARS = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '\'' => "&apos;", '"' => "&quot;")
 
 """
     escape(x::AbstractString) -> String
@@ -33,7 +27,7 @@ Escape the five XML predefined entities: `&` `<` `>` `'` `"`.
     `&amp;` were left untouched.  Now every `&` is escaped, so `escape("&amp;")` produces
     `"&amp;amp;"`.  Call `escape` only on raw, unescaped text.
 """
-escape(x::AbstractString) = replace(x, escape_chars...)
+escape(x::AbstractString) = replace(x, ESCAPE_CHARS...)
 
 # Replace a numeric character reference with its Unicode character.
 # Numeric character references encode characters by code point: decimal (&#233; → é) or hex (&#xE9; → é).
@@ -46,25 +40,14 @@ end
 
 """
     unescape(x::AbstractString) -> String
-    unescape(x::SubString{String}) -> Union{SubString{String}, String}
 
 Unescape XML entities in `x`: the five predefined entities (`&amp;` `&lt;` `&gt;` `&apos;`
-`&quot;`) and numeric character references (`&#123;`, `&#xAB;`).  Each reference is processed
+`&quot;`) and numeric character references (`&#123;`, `&#xAB;`). Each reference is processed
 exactly once (no double-unescaping).
-
-When `x` is a `SubString{String}` and contains no `&`, the input is returned unchanged
-to avoid allocating — handy when scanning lots of text through the lazy parser.
 """
 function unescape(x::AbstractString)
-    occursin('&', x) || return string(x)
     s = string(x)
-    occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
-    replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
-end
-
-function unescape(x::SubString{String})
-    occursin('&', x) || return x
-    s = String(x)
+    occursin('&', s) || return s
     occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
     replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
 end
@@ -131,6 +114,24 @@ Base.keys(a::Attributes) = first.(a.entries)
 Base.values(a::Attributes) = last.(a.entries)
 
 #-----------------------------------------------------------------------------# Node
+"""
+    Node{S}
+
+In-memory DOM node parameterized on the string storage type `S` (typically `String`, or
+`SubString{String}` for zero-copy parsing). Every kind of XML node — `Element`, `Text`,
+`Comment`, `CData`, `ProcessingInstruction`, `Declaration`, `DTD`, `Document` — is
+represented by a single `Node{S}` whose [`NodeType`](@ref) determines which fields are
+populated.
+
+    parse(xml, Node)             # parse a string into a Node{String}
+    parse(xml, Node{SubString{String}})  # zero-copy variant
+    read(filename, Node)         # read & parse a file
+
+Use the accessor functions ([`nodetype`](@ref), [`tag`](@ref), [`attributes`](@ref),
+[`value`](@ref), [`children`](@ref)) rather than the raw fields when navigating a tree.
+Integer indexing returns children (`node[1]`); string indexing returns attribute values
+(`node["class"]`).
+"""
 struct Node{S}
     nodetype::NodeType
     tag::Union{Nothing, S}
@@ -160,7 +161,20 @@ struct Node{S}
 end
 
 #-----------------------------------------------------------------------------# interface
+"""
+    nodetype(node) -> NodeType
+
+Return the [`NodeType`](@ref) of `node` (`Element`, `Text`, `Comment`, `CData`,
+`ProcessingInstruction`, `Declaration`, `DTD`, or `Document`).
+"""
 nodetype(o::Node) = o.nodetype
+
+"""
+    tag(node) -> Union{String, SubString{String}, Nothing}
+
+Return the tag name of `node`. Defined for `Element` (element name) and
+`ProcessingInstruction` (target name); returns `nothing` for other node types.
+"""
 tag(o::Node) = o.tag
 
 """
@@ -176,14 +190,41 @@ or `nothing` if the node has no attributes.
 """
 attributes(o::Node) = isnothing(o.attributes) ? nothing : Attributes(o.attributes)
 
+"""
+    value(node) -> Union{String, SubString{String}, Nothing}
+
+Return the textual content of `node`. Defined for `Text`, `Comment`, `CData`, `DTD`, and
+`ProcessingInstruction`; returns `nothing` for `Element`, `Declaration`, and `Document`
+(use [`children`](@ref) for those).
+"""
 value(o::Node) = o.value
+
+"""
+    children(node) -> Vector{Node} or ()
+
+Return the child nodes of `node` in document order. Returns an empty tuple `()` for nodes
+that cannot have children (e.g. `Text`, `Comment`, `CData`).
+"""
 children(o::Node) = something(o.children, ())
 
+"""
+    is_simple(node) -> Bool
+
+Return `true` if `node` is an `Element` with no attributes and exactly one `Text` or
+`CData` child — i.e. the `<tag>content</tag>` pattern with no nested markup. See also
+[`simple_value`](@ref).
+"""
 is_simple(o::Node) = o.nodetype === Element &&
     (isnothing(o.attributes) || isempty(o.attributes)) &&
     !isnothing(o.children) && length(o.children) == 1 &&
     o.children[1].nodetype in (Text, CData)
 
+"""
+    simple_value(node) -> String
+
+Return the textual content of a simple element (see [`is_simple`](@ref)). Errors if
+`node` is not simple.
+"""
 simple_value(o::Node) = is_simple(o) ? o.children[1].value :
     error("`simple_value` is only defined for simple nodes.")
 
@@ -204,6 +245,7 @@ function Base.parent(child::Node, root::Node)
     result
 end
 
+# Depth-first search for `child` within `current`; returns the containing node or nothing.
 function _find_parent(child::Node, current::Node)
     for c in children(current)
         c === child && return current
@@ -228,6 +270,8 @@ function depth(child::Node, root::Node)
     result
 end
 
+# Depth-first search returning the depth of `child` relative to `current` (where children
+# of `current` are at depth `d + 1`), or nothing if not found.
 function _find_depth(child::Node, current::Node, d::Int)
     for c in children(current)
         c === child && return d + 1
@@ -255,11 +299,16 @@ include("lazynode.jl")
 
 
 #-----------------------------------------------------------------------------# _to_node
+# Coerce a positional argument to a Node{String}: identity for nodes, wrap non-nodes as
+# Text. The middle method rejects non-String parameterizations to keep mixed-storage trees
+# from being silently constructed.
 _to_node(n::Node{String}) = n
 _to_node(n::Node) = throw(ArgumentError("Expected Node{String}, got $(typeof(n))"))
 _to_node(x) = Node{String}(Text, nothing, nothing, string(x), nothing)
 
 #-----------------------------------------------------------------------------# NodeType constructors
+# Make each NodeType variant callable as a constructor: `Element("div", ...)`,
+# `Text("hi")`, etc. Dispatches on `T` to validate args/kwargs and build the right Node.
 function (T::NodeType)(args...; attrs...)
     S = String
     if T in (Text, Comment, CData, DTD)
@@ -291,12 +340,14 @@ function (T::NodeType)(args...; attrs...)
 end
 
 #-----------------------------------------------------------------------------# equality
+# Treat `nothing` and an empty collection as equivalent so that an absent attribute /
+# children field compares equal to an explicitly empty one.
 _eq(::Nothing, ::Nothing) = true
 _eq(::Nothing, b) = isempty(b)
 _eq(a, ::Nothing) = isempty(a)
 _eq(a, b) = a == b
 
-# Attribute equality is order-insensitive per XML spec
+# Attribute equality is order-insensitive per XML spec.
 function _attrs_eq(a, b)
     a_empty = isnothing(a) || isempty(a)
     b_empty = isnothing(b) || isempty(b)
@@ -452,6 +503,7 @@ const _INDENT_STRINGS = [" " ^ n for n in 0:_MAX_CACHED_INDENT]
     " " ^ n
 end
 
+# Serialize `key="escaped-value"` pairs for an attributes vector (no leading space outside).
 function _print_attrs(io::IO, attributes)
     isnothing(attributes) && return
     for (k, v) in attributes
@@ -461,6 +513,8 @@ function _print_attrs(io::IO, attributes)
     end
 end
 
+# Whitespace-only Text — emitted by the parser to round-trip source whitespace; pretty
+# printing regenerates indentation from the tree shape and drops these.
 @inline function _is_ignorable_text(node::Node)
     node.nodetype === Text && !isnothing(node.value) && all(isspace, node.value)
 end
@@ -479,6 +533,8 @@ function _has_significant_text(children)
     false
 end
 
+# Main XML serializer. `depth` controls indentation; `preserve` propagates `xml:space=
+# "preserve"` semantics down the subtree so we don't reformat whitespace-sensitive content.
 function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::Bool=false)
     pad = preserve ? "" : _indent_str(indent * depth)
     nt = node.nodetype
@@ -569,11 +625,17 @@ function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}})
     _parse(String(xml), SubString{String}, identity)
 end
 
+# Convert a parser substring to the requested storage type — copy to a fresh String, or
+# keep the zero-copy SubString view.
 _to(::Type{String}, s::AbstractString) = String(s)
 _to(::Type{SubString{String}}, s::SubString{String}) = s
 
+# Collapse an empty Vector to `nothing` so Node fields store "absent" canonically.
 _nothingify(v::Vector) = isempty(v) ? nothing : v
 
+# Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with
+# entity decoding) and `identity` for zero-copy SubString parsing where the caller opts
+# to keep raw escapes.
 function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
     tags = S[]
     attrs_stack = Vector{Pair{S,S}}[]
@@ -589,24 +651,24 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
     for token in tokenize(xml)
         k = token.kind
 
-        if k === TOKEN_TEXT
+        if k === TokenKinds.TEXT
             push!(last(children_stack), Node{S}(Text, nothing, nothing, convert_text(token.raw), nothing))
 
-        elseif k === TOKEN_OPEN_TAG
+        elseif k === TokenKinds.OPEN_TAG
             push!(tags, _to(S, tag_name(token)))
             push!(attrs_stack, Pair{S,S}[])
             push!(children_stack, Node{S}[])
 
-        elseif k === TOKEN_SELF_CLOSE
+        elseif k === TokenKinds.SELF_CLOSE
             t = pop!(tags)
             a = pop!(attrs_stack)
             pop!(children_stack)
             push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, nothing))
 
-        elseif k === TOKEN_TAG_CLOSE
+        elseif k === TokenKinds.TAG_CLOSE
             in_close_tag && (in_close_tag = false)
 
-        elseif k === TOKEN_CLOSE_TAG
+        elseif k === TokenKinds.CLOSE_TAG
             close_name = tag_name(token)
             isempty(tags) && error("Closing tag </$close_name> with no matching open tag.")
             t = pop!(tags)
@@ -616,10 +678,10 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
             push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, isempty(c) ? nothing : c))
             in_close_tag = true
 
-        elseif k === TOKEN_ATTR_NAME
+        elseif k === TokenKinds.ATTR_NAME
             pending_attr_name = token.raw
 
-        elseif k === TOKEN_ATTR_VALUE
+        elseif k === TokenKinds.ATTR_VALUE
             val = convert_text(attr_value(token))
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing
@@ -630,32 +692,32 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
                 push!(last(attrs_stack), name => val)
             end
 
-        elseif k === TOKEN_XML_DECL_OPEN
+        elseif k === TokenKinds.XML_DECL_OPEN
             decl_attrs = Pair{S,S}[]
 
-        elseif k === TOKEN_XML_DECL_CLOSE
+        elseif k === TokenKinds.XML_DECL_CLOSE
             a = isempty(decl_attrs) ? nothing : decl_attrs
             push!(last(children_stack), Node{S}(Declaration, nothing, a, nothing, nothing))
             decl_attrs = nothing
 
-        elseif k === TOKEN_COMMENT_CONTENT
+        elseif k === TokenKinds.COMMENT_CONTENT
             push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, token.raw), nothing))
 
-        elseif k === TOKEN_CDATA_CONTENT
+        elseif k === TokenKinds.CDATA_CONTENT
             push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, token.raw), nothing))
 
-        elseif k === TOKEN_DOCTYPE_CONTENT
+        elseif k === TokenKinds.DOCTYPE_CONTENT
             push!(last(children_stack), Node{S}(DTD, nothing, nothing, _to(S, lstrip(token.raw)), nothing))
 
-        elseif k === TOKEN_PI_OPEN
+        elseif k === TokenKinds.PI_OPEN
             pending_pi_tag = pi_target(token)
             pending_pi_value = nothing
 
-        elseif k === TOKEN_PI_CONTENT
+        elseif k === TokenKinds.PI_CONTENT
             content = strip(token.raw)
             pending_pi_value = isempty(content) ? nothing : _to(S, content)
 
-        elseif k === TOKEN_PI_CLOSE
+        elseif k === TokenKinds.PI_CLOSE
             push!(last(children_stack), Node{S}(ProcessingInstruction, _to(S, pending_pi_tag), nothing, pending_pi_value, nothing))
         end
     end
@@ -726,11 +788,14 @@ struct ParsedDTD
     notations::Vector{NotationDecl}
 end
 
-# DTD parsing helpers
+# DTD parsing helpers — each returns (parsed_piece, new_pos) so calls compose.
+
+# A byte that can appear in an XML Name (letters, digits, `_`, `-`, `.`, `:`).
 @inline _dtd_is_name_char(c::Char) =
     ('a' <= c <= 'z') || ('A' <= c <= 'Z') || ('0' <= c <= '9') ||
     c == '_' || c == '-' || c == '.' || c == ':'
 
+# Advance past any whitespace.
 function _dtd_skip_ws(s, pos)
     while pos <= ncodeunits(s) && isspace(s[pos])
         pos += 1
@@ -738,6 +803,7 @@ function _dtd_skip_ws(s, pos)
     pos
 end
 
+# Read an XML Name token; errors if no name characters are present.
 function _dtd_read_name(s, pos)
     pos = _dtd_skip_ws(s, pos)
     start = pos
@@ -748,6 +814,7 @@ function _dtd_read_name(s, pos)
     SubString(s, start, pos - 1), pos
 end
 
+# Read a `"..."` or `'...'` string and return the contents without the surrounding quotes.
 function _dtd_read_quoted(s, pos)
     pos = _dtd_skip_ws(s, pos)
     q = s[pos]
@@ -762,6 +829,8 @@ function _dtd_read_quoted(s, pos)
     val, pos
 end
 
+# Read a balanced parenthesized expression (e.g. `(a|b|(c,d))`), returning the full
+# substring including the outer `(` and `)`. Skips over quoted strings inside.
 function _dtd_read_parens(s, pos)
     pos = _dtd_skip_ws(s, pos)
     s[pos] == '(' || error("Expected '(' at position $pos in DTD")
@@ -785,6 +854,8 @@ function _dtd_read_parens(s, pos)
     SubString(s, start, pos - 1), pos
 end
 
+# Advance past the next `>` that terminates a markup declaration, ignoring `>` inside
+# quoted strings.
 function _dtd_skip_to_close(s, pos)
     while pos <= ncodeunits(s) && s[pos] != '>'
         c = s[pos]
@@ -799,6 +870,8 @@ function _dtd_skip_to_close(s, pos)
     pos <= ncodeunits(s) ? pos + 1 : pos
 end
 
+# Parse `<!ELEMENT name content>` — content is either a name (EMPTY/ANY) or a parens
+# group with an optional `*`/`+`/`?` quantifier appended.
 function _dtd_parse_element(s, pos)
     name, pos = _dtd_read_name(s, pos)
     pos = _dtd_skip_ws(s, pos)
@@ -815,6 +888,7 @@ function _dtd_parse_element(s, pos)
     ElementDecl(String(name), String(content)), pos
 end
 
+# Parse `<!ATTLIST element name type default ...>` — emits one AttDecl per attribute.
 function _dtd_parse_attlist(s, pos)
     element, pos = _dtd_read_name(s, pos)
     atts = AttDecl[]
@@ -861,6 +935,8 @@ function _dtd_parse_attlist(s, pos)
     atts, pos
 end
 
+# Parse `<!ENTITY [%] name "value">` or `<!ENTITY name SYSTEM/PUBLIC ...>`. `%` marks a
+# parameter entity (referenced as `%name;` in DTDs only).
 function _dtd_parse_entity(s, pos)
     pos = _dtd_skip_ws(s, pos)
     parameter = false
@@ -895,6 +971,7 @@ function _dtd_parse_entity(s, pos)
     EntityDecl(String(name), value, external_id, parameter), pos
 end
 
+# Parse `<!NOTATION name SYSTEM "uri">` / `<!NOTATION name PUBLIC "pubid" ["uri"]>`.
 function _dtd_parse_notation(s, pos)
     name, pos = _dtd_read_name(s, pos)
     pos = _dtd_skip_ws(s, pos)

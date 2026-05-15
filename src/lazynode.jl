@@ -22,7 +22,7 @@ struct LazyNode{S <: AbstractString}
 end
 
 function LazyNode(data::S, nt::NodeType) where {S <: AbstractString}
-    LazyNode{S}(data, Token(TOKEN_TEXT, SubString(data, 1, 0)), nt)
+    LazyNode{S}(data, Token(TokenKinds.TEXT, SubString(data, 1, 0)), nt)
 end
 
 nodetype(n::LazyNode) = n.nodetype
@@ -62,7 +62,7 @@ function value(n::LazyNode)
         iterate(iter)  # PI_OPEN
         result = iterate(iter)
         result === nothing && return nothing
-        result[1].kind === TOKEN_PI_CONTENT || return nothing
+        result[1].kind === TokenKinds.PI_CONTENT || return nothing
         content = strip(result[1].raw)
         return isempty(content) ? nothing : content
     end
@@ -82,7 +82,7 @@ function attributes(n::LazyNode)
     iterate(iter)  # skip OPEN_TAG or XML_DECL_OPEN
     attrs = Pair{SubString{String}, SubString{String}}[]
     for tok in iter
-        tok.kind === TOKEN_ATTR_NAME || break
+        tok.kind === TokenKinds.ATTR_NAME || break
         name = tok.raw
         result = iterate(iter)
         result === nothing && break
@@ -96,7 +96,7 @@ function Base.get(n::LazyNode, key::AbstractString, default)
     iter = _lazy_tokenizer(n)
     iterate(iter)  # skip OPEN_TAG or XML_DECL_OPEN
     for tok in iter
-        tok.kind === TOKEN_ATTR_NAME || return default
+        tok.kind === TokenKinds.ATTR_NAME || return default
         if tok.raw == key
             result = iterate(iter)
             result === nothing && return default
@@ -124,7 +124,7 @@ function Base.keys(n::LazyNode)
     iterate(iter)
     result = SubString{String}[]
     for tok in iter
-        tok.kind === TOKEN_ATTR_NAME || break
+        tok.kind === TokenKinds.ATTR_NAME || break
         push!(result, tok.raw)
         iterate(iter)  # skip value
     end
@@ -141,8 +141,8 @@ function children(n::LazyNode{S}) where {S}
     end
     iter = _lazy_tokenizer(n)
     for tok in iter
-        tok.kind === TOKEN_SELF_CLOSE && return LazyNode{S}[]
-        tok.kind === TOKEN_TAG_CLOSE && break
+        tok.kind === TokenKinds.SELF_CLOSE && return LazyNode{S}[]
+        tok.kind === TokenKinds.TAG_CLOSE && break
     end
     _lazy_collect_children(n.data, iter)
 end
@@ -151,27 +151,27 @@ function _lazy_collect_children(data::S, iter) where {S <: AbstractString}
     result = LazyNode{S}[]
     for tok in iter
         k = tok.kind
-        if k === TOKEN_TEXT
+        if k === TokenKinds.TEXT
             push!(result, LazyNode(data, tok, Text))
-        elseif k === TOKEN_OPEN_TAG
+        elseif k === TokenKinds.OPEN_TAG
             push!(result, LazyNode(data, tok, Element))
             _lazy_skip_element!(iter)
-        elseif k === TOKEN_COMMENT_OPEN
+        elseif k === TokenKinds.COMMENT_OPEN
             push!(result, LazyNode(data, tok, Comment))
-            _lazy_skip_until!(iter, TOKEN_COMMENT_CLOSE)
-        elseif k === TOKEN_CDATA_OPEN
+            _lazy_skip_until!(iter, TokenKinds.COMMENT_CLOSE)
+        elseif k === TokenKinds.CDATA_OPEN
             push!(result, LazyNode(data, tok, CData))
-            _lazy_skip_until!(iter, TOKEN_CDATA_CLOSE)
-        elseif k === TOKEN_PI_OPEN
+            _lazy_skip_until!(iter, TokenKinds.CDATA_CLOSE)
+        elseif k === TokenKinds.PI_OPEN
             push!(result, LazyNode(data, tok, ProcessingInstruction))
-            _lazy_skip_until!(iter, TOKEN_PI_CLOSE)
-        elseif k === TOKEN_XML_DECL_OPEN
+            _lazy_skip_until!(iter, TokenKinds.PI_CLOSE)
+        elseif k === TokenKinds.XML_DECL_OPEN
             push!(result, LazyNode(data, tok, Declaration))
-            _lazy_skip_until!(iter, TOKEN_XML_DECL_CLOSE)
-        elseif k === TOKEN_DOCTYPE_OPEN
+            _lazy_skip_until!(iter, TokenKinds.XML_DECL_CLOSE)
+        elseif k === TokenKinds.DOCTYPE_OPEN
             push!(result, LazyNode(data, tok, DTD))
-            _lazy_skip_until!(iter, TOKEN_DOCTYPE_CLOSE)
-        elseif k === TOKEN_CLOSE_TAG
+            _lazy_skip_until!(iter, TokenKinds.DOCTYPE_CLOSE)
+        elseif k === TokenKinds.CLOSE_TAG
             break
         end
     end
@@ -182,12 +182,12 @@ function _lazy_skip_element!(iter)
     depth = 1
     for tok in iter
         k = tok.kind
-        if k === TOKEN_OPEN_TAG
+        if k === TokenKinds.OPEN_TAG
             depth += 1
-        elseif k === TOKEN_SELF_CLOSE
+        elseif k === TokenKinds.SELF_CLOSE
             depth -= 1
             depth == 0 && return
-        elseif k === TOKEN_CLOSE_TAG
+        elseif k === TokenKinds.CLOSE_TAG
             depth -= 1
             if depth == 0
                 iterate(iter)  # consume trailing TAG_CLOSE
@@ -197,7 +197,7 @@ function _lazy_skip_element!(iter)
     end
 end
 
-function _lazy_skip_until!(iter, target::TokenKind)
+function _lazy_skip_until!(iter, target::TokenKinds.Kind)
     for tok in iter
         tok.kind === target && return
     end
@@ -205,7 +205,7 @@ end
 
 _token_end(tok) = tok.raw.offset + tok.raw.ncodeunits
 
-function _scan_to_close(iter, close_kind::TokenKind)
+function _scan_to_close(iter, close_kind::TokenKinds.Kind)
     for tok in iter
         tok.kind === close_kind && return _token_end(tok)
     end
@@ -225,17 +225,17 @@ function sourcetext(n::LazyNode)
     if nt === Element
         iter = _lazy_tokenizer(n)
         for tok in iter
-            tok.kind === TOKEN_SELF_CLOSE && return SubString(n.data, start, _token_end(tok))
-            tok.kind === TOKEN_TAG_CLOSE && break
+            tok.kind === TokenKinds.SELF_CLOSE && return SubString(n.data, start, _token_end(tok))
+            tok.kind === TokenKinds.TAG_CLOSE && break
         end
         depth = 1
         for tok in iter
             k = tok.kind
-            if k === TOKEN_OPEN_TAG
+            if k === TokenKinds.OPEN_TAG
                 depth += 1
-            elseif k === TOKEN_SELF_CLOSE
+            elseif k === TokenKinds.SELF_CLOSE
                 depth -= 1
-            elseif k === TOKEN_CLOSE_TAG
+            elseif k === TokenKinds.CLOSE_TAG
                 depth -= 1
                 if depth == 0
                     result = iterate(iter)
@@ -246,15 +246,15 @@ function sourcetext(n::LazyNode)
         end
         error("Could not find closing tag")
     elseif nt === Comment
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_COMMENT_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.COMMENT_CLOSE))
     elseif nt === CData
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_CDATA_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.CDATA_CLOSE))
     elseif nt === ProcessingInstruction
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_PI_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.PI_CLOSE))
     elseif nt === Declaration
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_XML_DECL_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.XML_DECL_CLOSE))
     elseif nt === DTD
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TOKEN_DOCTYPE_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.DOCTYPE_CLOSE))
     elseif nt === Text
         return n.token.raw
     elseif nt === Document
@@ -292,9 +292,9 @@ function eachchildnode(n::LazyNode{S}) where {S}
         return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(false))
     elseif nt === Element
         for tok in iter
-            if tok.kind === TOKEN_SELF_CLOSE
+            if tok.kind === TokenKinds.SELF_CLOSE
                 return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(true))
-            elseif tok.kind === TOKEN_TAG_CLOSE
+            elseif tok.kind === TokenKinds.TAG_CLOSE
                 return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(false))
             end
         end
@@ -306,33 +306,33 @@ function Base.iterate(ci::LazyChildIterator, _ = nothing)
     ci.done[] && return nothing
     for tok in ci.iter
         k = tok.kind
-        if k === TOKEN_TEXT
+        if k === TokenKinds.TEXT
             return (LazyNode(ci.data, tok, Text), nothing)
-        elseif k === TOKEN_OPEN_TAG
+        elseif k === TokenKinds.OPEN_TAG
             node = LazyNode(ci.data, tok, Element)
             _lazy_skip_element!(ci.iter)
             return (node, nothing)
-        elseif k === TOKEN_COMMENT_OPEN
+        elseif k === TokenKinds.COMMENT_OPEN
             node = LazyNode(ci.data, tok, Comment)
-            _lazy_skip_until!(ci.iter, TOKEN_COMMENT_CLOSE)
+            _lazy_skip_until!(ci.iter, TokenKinds.COMMENT_CLOSE)
             return (node, nothing)
-        elseif k === TOKEN_CDATA_OPEN
+        elseif k === TokenKinds.CDATA_OPEN
             node = LazyNode(ci.data, tok, CData)
-            _lazy_skip_until!(ci.iter, TOKEN_CDATA_CLOSE)
+            _lazy_skip_until!(ci.iter, TokenKinds.CDATA_CLOSE)
             return (node, nothing)
-        elseif k === TOKEN_PI_OPEN
+        elseif k === TokenKinds.PI_OPEN
             node = LazyNode(ci.data, tok, ProcessingInstruction)
-            _lazy_skip_until!(ci.iter, TOKEN_PI_CLOSE)
+            _lazy_skip_until!(ci.iter, TokenKinds.PI_CLOSE)
             return (node, nothing)
-        elseif k === TOKEN_XML_DECL_OPEN
+        elseif k === TokenKinds.XML_DECL_OPEN
             node = LazyNode(ci.data, tok, Declaration)
-            _lazy_skip_until!(ci.iter, TOKEN_XML_DECL_CLOSE)
+            _lazy_skip_until!(ci.iter, TokenKinds.XML_DECL_CLOSE)
             return (node, nothing)
-        elseif k === TOKEN_DOCTYPE_OPEN
+        elseif k === TokenKinds.DOCTYPE_OPEN
             node = LazyNode(ci.data, tok, DTD)
-            _lazy_skip_until!(ci.iter, TOKEN_DOCTYPE_CLOSE)
+            _lazy_skip_until!(ci.iter, TokenKinds.DOCTYPE_CLOSE)
             return (node, nothing)
-        elseif k === TOKEN_CLOSE_TAG || k === TOKEN_TAG_CLOSE
+        elseif k === TokenKinds.CLOSE_TAG || k === TokenKinds.TAG_CLOSE
             ci.done[] = true
             return nothing
         end

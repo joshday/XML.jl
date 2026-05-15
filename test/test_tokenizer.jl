@@ -12,7 +12,7 @@ raws(xml)  = [String(t.raw) for t in tokenize(xml)]
 @testset "plain text" begin
     toks = collect(tokenize("hello world"))
     @test length(toks) == 1
-    @test toks[1].kind == TOKEN_TEXT
+    @test toks[1].kind == TokenKinds.TEXT
     @test toks[1].raw == "hello world"
 end
 
@@ -22,7 +22,7 @@ end
 
 #-----------------------------------------------------------------------# Open tags
 @testset "open tag without attributes" begin
-    @test kinds("<div>") == [TOKEN_OPEN_TAG, TOKEN_TAG_CLOSE]
+    @test kinds("<div>") == [TokenKinds.OPEN_TAG, TokenKinds.TAG_CLOSE]
     @test raws("<div>") == ["<div", ">"]
 end
 
@@ -30,10 +30,10 @@ end
     xml = """<a href="url" class='main'>"""
     toks = collect(tokenize(xml))
     @test [t.kind for t in toks] == [
-        TOKEN_OPEN_TAG,
-        TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
-        TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
-        TOKEN_TAG_CLOSE,
+        TokenKinds.OPEN_TAG,
+        TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE,
+        TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE,
+        TokenKinds.TAG_CLOSE,
     ]
     @test tag_name(toks[1]) == "a"
     @test toks[2].raw == "href"
@@ -46,14 +46,14 @@ end
     xml = """<x a = "1" >"""
     toks = collect(tokenize(xml))
     @test [t.kind for t in toks] == [
-        TOKEN_OPEN_TAG, TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE, TOKEN_TAG_CLOSE,
+        TokenKinds.OPEN_TAG, TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE, TokenKinds.TAG_CLOSE,
     ]
     @test attr_value(toks[3]) == "1"
 end
 
 #-----------------------------------------------------------------------# Self-closing tags
 @testset "self-closing tag" begin
-    @test kinds("<br/>") == [TOKEN_OPEN_TAG, TOKEN_SELF_CLOSE]
+    @test kinds("<br/>") == [TokenKinds.OPEN_TAG, TokenKinds.SELF_CLOSE]
     @test raws("<br/>") == ["<br", "/>"]
 end
 
@@ -61,7 +61,7 @@ end
     xml = """<img src="a.png" />"""
     toks = collect(tokenize(xml))
     @test [t.kind for t in toks] == [
-        TOKEN_OPEN_TAG, TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE, TOKEN_SELF_CLOSE,
+        TokenKinds.OPEN_TAG, TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE, TokenKinds.SELF_CLOSE,
     ]
     @test tag_name(toks[1]) == "img"
     @test attr_value(toks[3]) == "a.png"
@@ -70,14 +70,14 @@ end
 #-----------------------------------------------------------------------# Close tags
 @testset "close tag" begin
     toks = collect(tokenize("</div>"))
-    @test [t.kind for t in toks] == [TOKEN_CLOSE_TAG, TOKEN_TAG_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.CLOSE_TAG, TokenKinds.TAG_CLOSE]
     @test tag_name(toks[1]) == "div"
     @test toks[2].raw == ">"
 end
 
 @testset "close tag with whitespace" begin
     toks = collect(tokenize("</div  >"))
-    @test [t.kind for t in toks] == [TOKEN_CLOSE_TAG, TOKEN_TAG_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.CLOSE_TAG, TokenKinds.TAG_CLOSE]
     @test tag_name(toks[1]) == "div"
 end
 
@@ -85,9 +85,9 @@ end
 @testset "element with text" begin
     xml = "<p>hello</p>"
     @test kinds(xml) == [
-        TOKEN_OPEN_TAG, TOKEN_TAG_CLOSE,
-        TOKEN_TEXT,
-        TOKEN_CLOSE_TAG, TOKEN_TAG_CLOSE,
+        TokenKinds.OPEN_TAG, TokenKinds.TAG_CLOSE,
+        TokenKinds.TEXT,
+        TokenKinds.CLOSE_TAG, TokenKinds.TAG_CLOSE,
     ]
     toks = collect(tokenize(xml))
     @test tag_name(toks[1]) == "p"
@@ -107,7 +107,7 @@ end
 @testset "comment" begin
     xml = "<!-- hello -->"
     toks = collect(tokenize(xml))
-    @test [t.kind for t in toks] == [TOKEN_COMMENT_OPEN, TOKEN_COMMENT_CONTENT, TOKEN_COMMENT_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.COMMENT_OPEN, TokenKinds.COMMENT_CONTENT, TokenKinds.COMMENT_CLOSE]
     @test toks[1].raw == "<!--"
     @test toks[2].raw == " hello "
     @test toks[3].raw == "-->"
@@ -115,7 +115,7 @@ end
 
 @testset "empty comment" begin
     toks = collect(tokenize("<!---->"))
-    @test [t.kind for t in toks] == [TOKEN_COMMENT_OPEN, TOKEN_COMMENT_CONTENT, TOKEN_COMMENT_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.COMMENT_OPEN, TokenKinds.COMMENT_CONTENT, TokenKinds.COMMENT_CLOSE]
     @test toks[2].raw == ""
 end
 
@@ -128,7 +128,7 @@ end
 @testset "CDATA" begin
     xml = "<![CDATA[raw & <text>]]>"
     toks = collect(tokenize(xml))
-    @test [t.kind for t in toks] == [TOKEN_CDATA_OPEN, TOKEN_CDATA_CONTENT, TOKEN_CDATA_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.CDATA_OPEN, TokenKinds.CDATA_CONTENT, TokenKinds.CDATA_CLOSE]
     @test toks[1].raw == "<![CDATA["
     @test toks[2].raw == "raw & <text>"
     @test toks[3].raw == "]]>"
@@ -136,7 +136,7 @@ end
 
 @testset "empty CDATA" begin
     toks = collect(tokenize("<![CDATA[]]>"))
-    @test [t.kind for t in toks] == [TOKEN_CDATA_OPEN, TOKEN_CDATA_CONTENT, TOKEN_CDATA_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.CDATA_OPEN, TokenKinds.CDATA_CONTENT, TokenKinds.CDATA_CLOSE]
     @test toks[2].raw == ""
 end
 
@@ -144,7 +144,7 @@ end
 @testset "processing instruction" begin
     xml = """<?style type="text/css"?>"""
     toks = collect(tokenize(xml))
-    @test [t.kind for t in toks] == [TOKEN_PI_OPEN, TOKEN_PI_CONTENT, TOKEN_PI_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.PI_OPEN, TokenKinds.PI_CONTENT, TokenKinds.PI_CLOSE]
     @test toks[1].raw == "<?style"
     @test pi_target(toks[1]) == "style"
     @test toks[2].raw == """ type="text/css\""""
@@ -153,7 +153,7 @@ end
 
 @testset "PI with no content" begin
     toks = collect(tokenize("<?target?>"))
-    @test [t.kind for t in toks] == [TOKEN_PI_OPEN, TOKEN_PI_CONTENT, TOKEN_PI_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.PI_OPEN, TokenKinds.PI_CONTENT, TokenKinds.PI_CLOSE]
     @test pi_target(toks[1]) == "target"
     @test toks[2].raw == ""
 end
@@ -163,10 +163,10 @@ end
     xml = """<?xml version="1.0" encoding="UTF-8"?>"""
     toks = collect(tokenize(xml))
     @test [t.kind for t in toks] == [
-        TOKEN_XML_DECL_OPEN,
-        TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
-        TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
-        TOKEN_XML_DECL_CLOSE,
+        TokenKinds.XML_DECL_OPEN,
+        TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE,
+        TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE,
+        TokenKinds.XML_DECL_CLOSE,
     ]
     @test pi_target(toks[1]) == "xml"
     @test toks[1].raw == "<?xml"
@@ -188,7 +188,7 @@ end
 @testset "DOCTYPE simple" begin
     xml = """<!DOCTYPE note SYSTEM "note.dtd">"""
     toks = collect(tokenize(xml))
-    @test [t.kind for t in toks] == [TOKEN_DOCTYPE_OPEN, TOKEN_DOCTYPE_CONTENT, TOKEN_DOCTYPE_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.DOCTYPE_OPEN, TokenKinds.DOCTYPE_CONTENT, TokenKinds.DOCTYPE_CLOSE]
     @test toks[1].raw == "<!DOCTYPE"
     @test toks[2].raw == """ note SYSTEM "note.dtd\""""
     @test toks[3].raw == ">"
@@ -197,14 +197,14 @@ end
 @testset "DOCTYPE with internal subset" begin
     xml = """<!DOCTYPE note [<!ELEMENT note (#PCDATA)>]>"""
     toks = collect(tokenize(xml))
-    @test [t.kind for t in toks] == [TOKEN_DOCTYPE_OPEN, TOKEN_DOCTYPE_CONTENT, TOKEN_DOCTYPE_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.DOCTYPE_OPEN, TokenKinds.DOCTYPE_CONTENT, TokenKinds.DOCTYPE_CLOSE]
     @test toks[2].raw == " note [<!ELEMENT note (#PCDATA)>]"
 end
 
 @testset "DOCTYPE with quoted > in internal subset" begin
     xml = """<!DOCTYPE note [<!ATTLIST x y CDATA "a>b">]>"""
     toks = collect(tokenize(xml))
-    @test [t.kind for t in toks] == [TOKEN_DOCTYPE_OPEN, TOKEN_DOCTYPE_CONTENT, TOKEN_DOCTYPE_CLOSE]
+    @test [t.kind for t in toks] == [TokenKinds.DOCTYPE_OPEN, TokenKinds.DOCTYPE_CONTENT, TokenKinds.DOCTYPE_CLOSE]
     @test occursin("a>b", toks[2].raw)
 end
 
@@ -223,22 +223,22 @@ end
     tok_kinds = [t.kind for t in toks]
 
     # XML declaration
-    @test tok_kinds[1] == TOKEN_XML_DECL_OPEN
+    @test tok_kinds[1] == TokenKinds.XML_DECL_OPEN
     # DOCTYPE present
-    @test TOKEN_DOCTYPE_OPEN in tok_kinds
+    @test TokenKinds.DOCTYPE_OPEN in tok_kinds
     # All open tags have matching closes
-    open_names  = [tag_name(t) for t in toks if t.kind == TOKEN_OPEN_TAG]
-    close_names = [tag_name(t) for t in toks if t.kind == TOKEN_CLOSE_TAG]
+    open_names  = [tag_name(t) for t in toks if t.kind == TokenKinds.OPEN_TAG]
+    close_names = [tag_name(t) for t in toks if t.kind == TokenKinds.CLOSE_TAG]
     @test open_names == ["root", "child", "empty"]
     @test close_names == ["child", "root"]
     # CDATA is present
-    cdata_content = [t.raw for t in toks if t.kind == TOKEN_CDATA_CONTENT]
+    cdata_content = [t.raw for t in toks if t.kind == TokenKinds.CDATA_CONTENT]
     @test cdata_content == ["data"]
     # Comment is present
-    comment_content = [t.raw for t in toks if t.kind == TOKEN_COMMENT_CONTENT]
+    comment_content = [t.raw for t in toks if t.kind == TokenKinds.COMMENT_CONTENT]
     @test comment_content == [" comment "]
     # PI is present
-    pi_opens = [t for t in toks if t.kind == TOKEN_PI_OPEN]
+    pi_opens = [t for t in toks if t.kind == TokenKinds.PI_OPEN]
     @test length(pi_opens) == 1
     @test pi_target(pi_opens[1]) == "pi"
 end
@@ -264,8 +264,8 @@ end
     xml = """<a b = "c"  d='e' />"""
     toks = collect(tokenize(xml))
     @test [t.kind for t in toks] == [
-        TOKEN_OPEN_TAG, TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE,
-        TOKEN_ATTR_NAME, TOKEN_ATTR_VALUE, TOKEN_SELF_CLOSE,
+        TokenKinds.OPEN_TAG, TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE,
+        TokenKinds.ATTR_NAME, TokenKinds.ATTR_VALUE, TokenKinds.SELF_CLOSE,
     ]
 end
 
@@ -311,14 +311,14 @@ end
     # Tokenizer emits what it can; the tag is never closed but no error since EOF is reached
     toks = collect(tokenize("<div"))
     @test length(toks) == 1
-    @test toks[1].kind == TOKEN_OPEN_TAG
+    @test toks[1].kind == TokenKinds.OPEN_TAG
     @test tag_name(toks[1]) == "div"
 end
 
 @testset "unterminated close tag emits partial token" begin
     toks = collect(tokenize("</div"))
     @test length(toks) == 1
-    @test toks[1].kind == TOKEN_CLOSE_TAG
+    @test toks[1].kind == TokenKinds.CLOSE_TAG
     @test tag_name(toks[1]) == "div"
 end
 
@@ -339,7 +339,7 @@ end
     xml = "<p>café ñ 日本語</p>"
     toks = collect(tokenize(xml))
     text_tok = toks[3]
-    @test text_tok.kind == TOKEN_TEXT
+    @test text_tok.kind == TokenKinds.TEXT
     @test text_tok.raw == "café ñ 日本語"
 end
 
@@ -358,24 +358,24 @@ end
 @testset "adjacent tags" begin
     xml = "<a></a><b></b>"
     toks = collect(tokenize(xml))
-    open_names  = [tag_name(t) for t in toks if t.kind == TOKEN_OPEN_TAG]
-    close_names = [tag_name(t) for t in toks if t.kind == TOKEN_CLOSE_TAG]
+    open_names  = [tag_name(t) for t in toks if t.kind == TokenKinds.OPEN_TAG]
+    close_names = [tag_name(t) for t in toks if t.kind == TokenKinds.CLOSE_TAG]
     @test open_names == ["a", "b"]
     @test close_names == ["a", "b"]
     # No text tokens between them
-    @test !any(t -> t.kind == TOKEN_TEXT, toks)
+    @test !any(t -> t.kind == TokenKinds.TEXT, toks)
 end
 
 @testset "text between adjacent tags" begin
     xml = "<a>x</a>y<b/>"
-    texts = [t.raw for t in tokenize(xml) if t.kind == TOKEN_TEXT]
+    texts = [t.raw for t in tokenize(xml) if t.kind == TokenKinds.TEXT]
     @test texts == ["x", "y"]
 end
 
 @testset "multiple attributes" begin
     xml = """<div a="1" b="2" c="3">"""
-    names = [String(t.raw) for t in tokenize(xml) if t.kind == TOKEN_ATTR_NAME]
-    vals  = [String(attr_value(t)) for t in tokenize(xml) if t.kind == TOKEN_ATTR_VALUE]
+    names = [String(t.raw) for t in tokenize(xml) if t.kind == TokenKinds.ATTR_NAME]
+    vals  = [String(attr_value(t)) for t in tokenize(xml) if t.kind == TokenKinds.ATTR_VALUE]
     @test names == ["a", "b", "c"]
     @test vals == ["1", "2", "3"]
 end
@@ -384,7 +384,7 @@ end
     xml = """<x a="1>2">"""
     toks = collect(tokenize(xml))
     @test attr_value(toks[3]) == "1>2"
-    @test toks[end].kind == TOKEN_TAG_CLOSE
+    @test toks[end].kind == TokenKinds.TAG_CLOSE
 end
 
 @testset "attribute with single quotes" begin
@@ -396,20 +396,20 @@ end
 
 @testset "mixed quote styles" begin
     xml = """<x a="1" b='2'>"""
-    vals = [attr_value(t) for t in tokenize(xml) if t.kind == TOKEN_ATTR_VALUE]
+    vals = [attr_value(t) for t in tokenize(xml) if t.kind == TokenKinds.ATTR_VALUE]
     @test vals == ["1", "2"]
 end
 
 @testset "whitespace-only text" begin
     xml = "<a>  \n\t </a>"
-    texts = [t for t in tokenize(xml) if t.kind == TOKEN_TEXT]
+    texts = [t for t in tokenize(xml) if t.kind == TokenKinds.TEXT]
     @test length(texts) == 1
     @test texts[1].raw == "  \n\t "
 end
 
 @testset "entities preserved verbatim" begin
     xml = "<p>&amp; &lt; &#x41;</p>"
-    texts = [t.raw for t in tokenize(xml) if t.kind == TOKEN_TEXT]
+    texts = [t.raw for t in tokenize(xml) if t.kind == TokenKinds.TEXT]
     @test texts == ["&amp; &lt; &#x41;"]
 end
 
@@ -418,7 +418,7 @@ end
     buf = IOBuffer()
     show(buf, tok)
     s = String(take!(buf))
-    @test occursin("TOKEN_TEXT", s)
+    @test occursin("TEXT", s)
     @test occursin("hello", s)
 end
 
