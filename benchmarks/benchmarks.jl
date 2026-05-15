@@ -10,8 +10,8 @@ using InteractiveUtils
 include("XMarkGenerator.jl")
 using .XMarkGenerator
 
-BenchmarkTools.DEFAULT_PARAMETERS.seconds = 3
-BenchmarkTools.DEFAULT_PARAMETERS.samples = 2000
+BenchmarkTools.DEFAULT_PARAMETERS.seconds = 10
+BenchmarkTools.DEFAULT_PARAMETERS.samples = 20000
 
 #-----------------------------------------------------------------------------# Test data
 # Small file (~120 lines)
