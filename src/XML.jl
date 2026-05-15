@@ -688,6 +688,14 @@ _to(::Type{SubString{String}}, s::SubString{String}) = s
 # Collapse an empty Vector to `nothing` so Node fields store "absent" canonically.
 _nothingify(v::Vector) = isempty(v) ? nothing : v
 
+# Decode the raw bytes of a TEXT/ATTR_VALUE token into the parser's storage type. When the
+# tokenizer guarantees no `&` was seen (`has_entities=false`), we skip the entity-decode
+# pass entirely. The `convert_text=identity` specialization (SubString parse) skips the
+# runtime branch as well — both arms would return the same value.
+@inline _text_value(::Type{S}, raw, _, ::typeof(identity)) where {S} = _to(S, raw)
+@inline _text_value(::Type{S}, raw, has_entities, convert_text::F) where {S, F} =
+    has_entities ? convert_text(raw) : _to(S, raw)
+
 # Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with
 # entity decoding) and `identity` for zero-copy SubString parsing where the caller opts
 # to keep raw escapes.
@@ -707,7 +715,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
         k = token.kind
 
         if k === TokenKinds.TEXT
-            push!(last(children_stack), Node{S}(Text, nothing, nothing, convert_text(token.raw), nothing))
+            v = _text_value(S, token.raw, token.has_entities, convert_text)
+            push!(last(children_stack), Node{S}(Text, nothing, nothing, v, nothing))
 
         elseif k === TokenKinds.OPEN_TAG
             push!(tags, _to(S, tag_name(token)))
@@ -737,7 +746,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
             pending_attr_name = token.raw
 
         elseif k === TokenKinds.ATTR_VALUE
-            val = convert_text(attr_value(token))
+            val = _text_value(S, attr_value(token), token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing
                 any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")

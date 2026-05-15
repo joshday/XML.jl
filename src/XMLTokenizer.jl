@@ -44,10 +44,24 @@ baremodule TokenKinds
 end
 
 #-----------------------------------------------------------------------# Token
+# `has_entities` records whether the raw bytes contain a `&`. It is set by the readers for
+# `TEXT` and `ATTR_VALUE` (where entity references can appear) and stays `false` for every
+# other token kind. The downstream parser uses it to skip `unescape`'s redundant byte scan
+# when no entities are present.
+#
+# Field order matters: `has_entities` lives in the alignment padding that would otherwise
+# sit between the 1-byte `kind` and the 24-byte `raw`. This keeps `sizeof(Token{String})`
+# at 32 bytes instead of 40, which matters because tokens are allocated by the million
+# during parse.
 struct Token{S <: AbstractString}
     kind::TokenKinds.Kind
+    has_entities::Bool
     raw::SubString{S}
 end
+
+# Backwards-compatible constructor for the many internal call sites that emit non-entity
+# tokens (markup, names, close tokens, etc.).
+@inline Token(kind::TokenKinds.Kind, raw::SubString{S}) where {S} = Token{S}(kind, false, raw)
 
 function Base.show(io::IO, t::Token)
     print(io, t.kind, ": ", repr(String(t.raw)))
@@ -204,13 +218,18 @@ end
 @noinline err(msg::AbstractString, pos::Int) = throw(ArgumentError("XML tokenizer error at position $pos: $msg"))
 
 #-----------------------------------------------------------------------# Text and markup
-# Read text content up to the next '<'
+# Read text content up to the next '<'. Tracks whether any '&' is present so the parser
+# can skip `unescape`'s redundant byte scan.
 function read_text(data::AbstractString, pos::Int)
     start = pos
-    @inbounds while !iseof(data, pos) && peek(data, pos) != UInt8('<')
+    has_amp = false
+    @inbounds while !iseof(data, pos)
+        b = peek(data, pos)
+        b == UInt8('<') && break
+        b == UInt8('&') && (has_amp = true)
         pos += 1
     end
-    tok = Token(TokenKinds.TEXT, @inbounds SubString(data, start, prevind(data, pos)))
+    tok = Token{typeof(data)}(TokenKinds.TEXT, has_amp, @inbounds(SubString(data, start, prevind(data, pos))))
     (tok, TokenizerState(pos, M_DEFAULT, no_token(data)))
 end
 
@@ -359,7 +378,8 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
-# Read a quoted attribute value (including the quotes)
+# Read a quoted attribute value (including the quotes). Tracks `&` presence for the
+# entity-decode short-circuit downstream.
 function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
     iseof(data, pos) && err("expected attribute value", pos)
 
@@ -368,14 +388,18 @@ function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
 
     start = pos
     pos += 1  # skip opening quote
-    @inbounds while !iseof(data, pos) && peek(data, pos) != q
+    has_amp = false
+    @inbounds while !iseof(data, pos)
+        b = peek(data, pos)
+        b == q && break
+        b == UInt8('&') && (has_amp = true)
         pos += 1
     end
     iseof(data, pos) && err("unterminated attribute value", start)
     pos += 1  # skip closing quote
 
     next_state = (mode == M_XML_DECL_VALUE) ? M_XML_DECL : M_TAG
-    tok = Token(TokenKinds.ATTR_VALUE, @inbounds SubString(data, start, pos - 1))
+    tok = Token{typeof(data)}(TokenKinds.ATTR_VALUE, has_amp, @inbounds(SubString(data, start, pos - 1)))
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 

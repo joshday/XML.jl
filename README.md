@@ -272,11 +272,11 @@ Benchmark source: [benchmarks.jl](benchmarks/benchmarks.jl).  Test data: `books.
 
                          Parse (medium) — median time (ms)
 
-        XML.jl  ■■■■■■■■■■■■■ 170.0
-   XML.jl (SS)  ■■■■■■■■■■■ 146.0
-         EzXML  ■■■■■■ 76.2
-      LightXML  ■■■■■■ 78.6
-       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 532.0
+        XML.jl  ■■■■■■■■■■■ 183.0
+   XML.jl (SS)  ■■■■■■■■■■■ 171.0
+         EzXML  ■■■■■■ 92.7
+      LightXML  ■■■■■■■■■ 139.0
+       XMLDict  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 634.0
 
 
                       Write (small) — median time (ms)
