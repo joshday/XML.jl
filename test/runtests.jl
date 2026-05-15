@@ -2909,6 +2909,55 @@ end
         @test value(children(doc[1])[1]) == "& < >"
     end
 
+    @testset "has_entities short-circuit (zero-copy, correctness)" begin
+        # Entity-free Text: returns the raw SubString view, no allocation.
+        doc = parse("<root>plain text no entities</root>", LazyNode)
+        v = value(children(doc[1])[1])
+        @test v isa SubString{String}
+        @test v == "plain text no entities"
+        @test (@allocated value(children(doc[1])[1])) ≥ 0  # smoke
+
+        # Entity-bearing Text: still decodes byte-for-byte like unescape.
+        d2 = parse("<root>a &amp; b &#x41; &#65; &lt;</root>", LazyNode)
+        tv = value(children(d2[1])[1])
+        @test tv == unescape(SubString("a &amp; b &#x41; &#65; &lt;"))
+        @test tv == "a & b A A <"
+
+        # Entity-free attribute: zero-copy SubString view.
+        d3 = parse("""<c r="A1" s="3" t="n"/>""", LazyNode)
+        c = d3[1]
+        @test get(c, "r", nothing) isa SubString{String}
+        @test get(c, "r", nothing) == "A1"
+        a = attributes(c)
+        @test a["s"] == "3"
+        @test a["s"] isa SubString{String}
+        pairs_collected = collect(eachattribute(c))
+        @test pairs_collected == ["r" => "A1", "s" => "3", "t" => "n"]
+        @test all(p -> last(p) isa SubString{String}, pairs_collected)
+
+        # Entity-bearing attribute: decoded.
+        d4 = parse("""<x a="x &amp; y" b="plain"/>""", LazyNode)
+        x = d4[1]
+        @test x["a"] == "x & y"
+        @test get(x, "b", nothing) == "plain"
+        @test get(x, "b", nothing) isa SubString{String}
+        @test attributes(x)["a"] == "x & y"
+        @test Dict(eachattribute(x)) == Dict("a" => "x & y", "b" => "plain")
+
+        # CDATA carries markup characters verbatim — never entity-decoded.
+        d5 = parse("<root><![CDATA[a & b < c &amp; d]]></root>", LazyNode)
+        cd = children(d5[1])[1]
+        @test nodetype(cd) == CData
+        @test value(cd) == "a & b < c &amp; d"
+
+        # is_simple_value: entity-free returns view, entity-bearing decodes.
+        s1 = parse("<t>simple</t>", LazyNode)[1]
+        @test XML.is_simple_value(s1) == "simple"
+        @test XML.is_simple_value(s1) isa SubString{String}
+        s2 = parse("<t>a &amp; b</t>", LazyNode)[1]
+        @test XML.is_simple_value(s2) == "a & b"
+    end
+
     @testset "Comment value" begin
         doc = parse("<root><!-- a comment --></root>", LazyNode)
         c = children(doc[1])[1]

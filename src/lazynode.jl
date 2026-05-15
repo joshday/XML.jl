@@ -30,6 +30,13 @@ nodetype(n::LazyNode) = n.nodetype
 _lazy_pos(n::LazyNode) = n.token.raw.offset + 1
 _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 
+# Entity-decode a TEXT/ATTR_VALUE token only when the tokenizer actually saw a `&`. When
+# `has_entities` is false the raw `SubString{String}` view is returned with no allocation
+# and no byte scan — the dominant case for spreadsheet-style data. `_decode_attr` strips
+# the surrounding quotes first; the flag is read from the token, not the stripped view.
+@inline _decode(tok::Token) = tok.has_entities ? unescape(tok.raw) : tok.raw
+@inline _decode_attr(tok::Token) = tok.has_entities ? unescape(attr_value(tok)) : attr_value(tok)
+
 #-----------------------------------------------------------------------------# tag / value
 function tag(n::LazyNode)
     nt = n.nodetype
@@ -44,7 +51,7 @@ end
 function value(n::LazyNode)
     nt = n.nodetype
     if nt === Text
-        return unescape(n.token.raw)
+        return _decode(n.token)
     elseif nt === Comment
         iter = _lazy_tokenizer(n)
         iterate(iter)  # COMMENT_OPEN
@@ -86,7 +93,7 @@ function attributes(n::LazyNode)
         name = tok.raw
         result = iterate(iter)
         result === nothing && break
-        push!(attrs, name => _as_substring(unescape(attr_value(result[1]))))
+        push!(attrs, name => _as_substring(_decode_attr(result[1])))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
@@ -108,7 +115,7 @@ function Base.get(n::LazyNode, key::AbstractString, default)
         if tok.raw == key
             result = iterate(iter)
             result === nothing && return default
-            return unescape(attr_value(result[1]))
+            return _decode_attr(result[1])
         else
             iterate(iter)  # skip value
         end
@@ -157,7 +164,7 @@ function Base.iterate(it::LazyAttrIterator, _ = nothing)
         it.done[] = true
         return nothing
     end
-    val = unescape(attr_value(r[1]))
+    val = _decode_attr(r[1])
     ((name => val), nothing)
 end
 
@@ -471,7 +478,7 @@ function is_simple_value(n::LazyNode)
     if k === TokenKinds.TEXT
         nxt = iterate(iter)
         (isnothing(nxt) || nxt[1].kind !== TokenKinds.CLOSE_TAG) && return nothing
-        return unescape(tok.raw)
+        return _decode(tok)
     elseif k === TokenKinds.CDATA_OPEN
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CONTENT) && return nothing
