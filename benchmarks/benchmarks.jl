@@ -149,8 +149,39 @@ ws_xml = let buf = IOBuffer()
     String(take!(buf))
 end
 
+# String-heavy worksheet: cells reference the shared string table (`t="s"`, `<v>` = SST
+# index). This is the most common real-world shape and the one where the `has_entities`
+# short-circuit and zero-copy accessors matter most for XLSX.jl `readtable`.
+ws_str_xml = let buf = IOBuffer()
+    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    print(buf, "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n")
+    print(buf, "<sheetData>\n")
+    for r in 1:5000
+        print(buf, "  <row r=\"", r, "\">")
+        for c in 1:8
+            col = Char(UInt32('A') + c - 1)
+            print(buf, "<c r=\"", col, r, "\" s=\"2\" t=\"s\"><v>", (r * c) % 50000, "</v></c>")
+        end
+        print(buf, "</row>\n")
+    end
+    print(buf, "</sheetData></worksheet>")
+    String(take!(buf))
+end
+
+# Entity-heavy SST: every <t> needs decoding, exercising the `has_entities` slow path.
+sst_entity_xml = let buf = IOBuffer()
+    print(buf, "<sst count=\"50000\" uniqueCount=\"50000\">")
+    for i in 1:50000
+        print(buf, "<si><t>A &amp; B &lt;tag&gt; #", i, "</t></si>")
+    end
+    print(buf, "</sst>")
+    String(take!(buf))
+end
+
 @info "  sst_xml: $(round(length(sst_xml) / 1024 / 1024, digits=2)) MB ($(50000) <si>)"
 @info "  ws_xml:  $(round(length(ws_xml) / 1024 / 1024, digits=2)) MB ($(3000) <row> × $(15) <c>)"
+@info "  ws_str_xml: $(round(length(ws_str_xml) / 1024 / 1024, digits=2)) MB ($(5000) <row> × $(8) string <c>)"
+@info "  sst_entity_xml: $(round(length(sst_entity_xml) / 1024 / 1024, digits=2)) MB (entity-heavy)"
 
 # Helper: walk a Node-based <si> subtree and concatenate its <t> text content.
 function _node_unformatted(io::IO, el::Node{String})
@@ -340,6 +371,115 @@ end setup=(doc = parse(ws_xml, LazyNode))
     end
     n
 end setup=(doc = parse(ws_xml, LazyNode))
+
+#-----------------------------------------------------------------------------# End-to-end XLSX.jl hot loops
+# The micro-benchmarks above isolate single operations. These mirror the *combined* work
+# XLSX.jl actually does per entry, so a regression in any sub-operation (parse, accessor,
+# entity short-circuit, iterator allocation) shows up where it matters for spreadsheet read
+# performance.
+
+# Mirrors XLSX.jl `sst.jl` `unformatted_text` / `gather_strings!`: recursively walk an
+# <si> subtree concatenating <t> text content.
+function _xlsx_unformatted(io::IO, e::XML.LazyNode)
+    t = XML.tag(e)
+    t == "rPh" && return nothing
+    if t == "t"
+        v = XML.is_simple_value(e)
+        isnothing(v) || write(io, v)
+    else
+        for ch in XML.eachchildnode(e)
+            XML.nodetype(ch) === XML.Element && _xlsx_unformatted(io, ch)
+        end
+    end
+    nothing
+end
+
+# Mirrors XLSX.jl `sst.jl` `sst_load!`: stream <si>, capture raw XML + unformatted text.
+@add_benchmark "XLSX sst_load! (end-to-end)" "LazyNode" begin
+    sst_el = doc[end]
+    shared = String[]
+    unformatted = String[]
+    for si in XML.eachchildnode(sst_el)
+        XML.nodetype(si) === XML.Element || continue
+        XML.tag(si) == "si" || continue
+        push!(shared, XML.write(si))
+        io = IOBuffer()
+        _xlsx_unformatted(io, si)
+        push!(unformatted, String(take!(io)))
+    end
+    (length(shared), length(unformatted))
+end setup=(doc = parse(sst_xml, LazyNode))
+
+# Mirrors XLSX.jl `cell.jl` `Cell(c, ws)` + `get_rowcells!`: per cell, read the r/s/t
+# attributes and the <v> value, exactly as the reader does. Numeric worksheet.
+@add_benchmark "XLSX cell read (end-to-end)" "numeric ws" begin
+    sd = doc[end][1]
+    ncells = 0
+    acc = 0
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            ref = get(c, "r", "")
+            t = get(c, "t", "")
+            s = get(c, "s", "")
+            acc += sizeof(ref) + sizeof(t) + sizeof(s)
+            for child in XML.eachchildnode(c)
+                XML.nodetype(child) === XML.Element || continue
+                if XML.tag(child) == "v"
+                    v = XML.is_simple_value(child)
+                    isnothing(v) || (acc += sizeof(v))
+                end
+            end
+            ncells += 1
+        end
+    end
+    (ncells, acc)
+end setup=(doc = parse(ws_xml, LazyNode))
+
+# Same loop on the string-heavy worksheet (t="s", SST-indexed) — the common real shape
+# and the one most sensitive to the entity short-circuit / zero-copy accessors.
+@add_benchmark "XLSX cell read (end-to-end)" "string ws" begin
+    sd = doc[end][1]
+    ncells = 0
+    acc = 0
+    for row in XML.eachchildnode(sd)
+        XML.nodetype(row) === XML.Element || continue
+        for c in XML.eachchildnode(row)
+            XML.nodetype(c) === XML.Element || continue
+            ref = get(c, "r", "")
+            t = get(c, "t", "")
+            s = get(c, "s", "")
+            acc += sizeof(ref) + sizeof(t) + sizeof(s)
+            for child in XML.eachchildnode(c)
+                XML.nodetype(child) === XML.Element || continue
+                if XML.tag(child) == "v"
+                    v = XML.is_simple_value(child)
+                    isnothing(v) || (acc += sizeof(v))
+                end
+            end
+            ncells += 1
+        end
+    end
+    (ncells, acc)
+end setup=(doc = parse(ws_str_xml, LazyNode))
+
+# Realistic-string SST: entries containing characters that DO need entity decoding, so the
+# `has_entities` slow path is exercised (catches regressions in the decode branch).
+@add_benchmark "XLSX sst_load! (end-to-end)" "LazyNode (entity-heavy)" begin
+    sst_el = doc[end]
+    n = 0
+    for si in XML.eachchildnode(sst_el)
+        XML.nodetype(si) === XML.Element || continue
+        XML.tag(si) == "si" || continue
+        for t in XML.eachchildnode(si)
+            XML.nodetype(t) === XML.Element || continue
+            v = XML.is_simple_value(t)
+            isnothing(v) || (n += sizeof(v))
+        end
+    end
+    n
+end setup=(doc = parse(sst_entity_xml, LazyNode))
 
 #-----------------------------------------------------------------------------# Write benchmarks_results.md
 _fmt_ms(t) = string(round(t, sigdigits=3), " ms")
